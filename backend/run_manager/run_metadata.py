@@ -1,7 +1,8 @@
 """Metadata models and JSON persistence for isolated MEDA analysis runs.
 
-This module stores run-level information only. It does not manage run
-execution, status transitions, filesystem layout, or scientific analysis.
+This module stores descriptive run metadata and the persisted lifecycle
+state. It does not manage status transitions, filesystem layout, or
+scientific analysis.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Union
+
+from backend.run_manager.run_status import RunStatus
 
 
 __all__ = [
@@ -139,15 +142,65 @@ def _validate_json_mapping(
     return copied
 
 
+def _validate_status(value: RunStatus | str) -> str:
+    """Validate and normalize a persisted run status."""
+    if isinstance(value, RunStatus):
+        return value.value
+
+    if not isinstance(value, str):
+        raise TypeError(
+            "status must be a RunStatus or string."
+        )
+
+    try:
+        return RunStatus(value.strip().upper()).value
+    except ValueError as exc:
+        allowed = ", ".join(status.value for status in RunStatus)
+        raise ValueError(
+            f"Unknown run status {value!r}. "
+            f"Expected one of: {allowed}."
+        ) from exc
+
+
+def _validate_failure_reason(
+    value: str | None,
+    status: str,
+) -> None:
+    """Validate an optional failure reason."""
+    if value is None:
+        return
+
+    if not isinstance(value, str):
+        raise TypeError(
+            "failure_reason must be a string or None."
+        )
+
+    if not value.strip():
+        raise ValueError(
+            "failure_reason must not be empty."
+        )
+
+    if status != RunStatus.FAILED.value:
+        raise ValueError(
+            "failure_reason can only be set when status is FAILED."
+        )
+
+
 @dataclass
 class RunMetadata:
-    """Descriptive metadata associated with one analysis run.
+    """Descriptive metadata and persisted state for one analysis run.
 
     Timestamps represent application run events, not MEDA observation
     timestamps or mission time coordinates.
 
     start_sol and end_sol describe the selected run range. They are
     metadata fields and do not perform any time conversion or analysis.
+
+    status stores the persisted lifecycle state. Actual transition rules
+    are defined separately in run_status.py.
+
+    failure_reason stores an operational or execution failure reason.
+    It does not represent scientific invalidity or data quality.
     """
 
     run_id: str
@@ -160,6 +213,8 @@ class RunMetadata:
     source_info: dict[str, Any] = field(default_factory=dict)
     settings: dict[str, Any] = field(default_factory=dict)
     application_version: str | None = None
+    status: RunStatus | str = RunStatus.PENDING
+    failure_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_id, str) or not self.run_id.strip():
@@ -175,6 +230,13 @@ class RunMetadata:
         _validate_datetime(self.created_at, "created_at")
         _validate_datetime(self.started_at, "started_at")
         _validate_datetime(self.finished_at, "finished_at")
+
+        self.status = _validate_status(self.status)
+
+        _validate_failure_reason(
+            self.failure_reason,
+            self.status,
+        )
 
         self.source_info = _validate_json_mapping(
             self.source_info,
@@ -216,6 +278,8 @@ class RunMetadata:
             "source_info": dict(self.source_info),
             "settings": dict(self.settings),
             "application_version": self.application_version,
+            "status": self.status,
+            "failure_reason": self.failure_reason,
         }
 
     @classmethod
@@ -226,8 +290,11 @@ class RunMetadata:
         """Create metadata from a dictionary.
 
         Unknown keys are ignored to allow compatible metadata extensions.
-        Missing SOL range fields are treated as None for backward
-        compatibility with metadata created by older versions.
+
+        Missing SOL range fields are treated as None.
+
+        Missing status fields are treated as PENDING so metadata created
+        by earlier versions remains readable.
         """
         if not isinstance(data, Mapping):
             raise TypeError("Metadata data must be a mapping.")
@@ -255,6 +322,8 @@ class RunMetadata:
             source_info=data.get("source_info", {}),
             settings=data.get("settings", {}),
             application_version=data.get("application_version"),
+            status=data.get("status", RunStatus.PENDING),
+            failure_reason=data.get("failure_reason"),
         )
 
 
