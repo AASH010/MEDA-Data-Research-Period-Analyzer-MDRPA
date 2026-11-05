@@ -60,9 +60,13 @@ class RunRegistry:
         self,
         paths: RunPaths,
         metadata: RunMetadata,
-        status: RunStatus = RunStatus.PENDING,
+        status: RunStatus | None = None,
     ) -> RunRecord:
-        """Register a new run.
+        """Register a new or restored run.
+
+        When status is omitted, the persisted status in RunMetadata
+        is used. This allows restored runs to retain their lifecycle
+        state instead of always defaulting to PENDING.
 
         Raises:
             TypeError: If supplied objects have unsupported types.
@@ -74,8 +78,19 @@ class RunRegistry:
         if not isinstance(metadata, RunMetadata):
             raise TypeError("metadata must be a RunMetadata instance.")
 
-        if not isinstance(status, RunStatus):
-            raise TypeError("status must be a RunStatus instance.")
+        if status is None:
+            try:
+                resolved_status = RunStatus(metadata.status)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Metadata contains an unsupported run status: "
+                    f"{metadata.status!r}."
+                ) from exc
+        else:
+            if not isinstance(status, RunStatus):
+                raise TypeError("status must be a RunStatus instance or None.")
+
+            resolved_status = status
 
         if paths.run_id != metadata.run_id:
             raise ValueError(
@@ -86,7 +101,7 @@ class RunRegistry:
             run_id=paths.run_id,
             paths=paths,
             metadata=metadata,
-            status=status,
+            status=resolved_status,
         )
 
         with self._lock:
