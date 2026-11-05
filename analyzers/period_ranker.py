@@ -44,9 +44,27 @@ DEFAULT_SYNC_PAIRS = DEFAULT_OUTPUT_DIR / "synchronization_pair_report.csv"
 DEFAULT_RANKING = DEFAULT_OUTPUT_DIR / "period_ranking.csv"
 DEFAULT_SUMMARY = DEFAULT_OUTPUT_DIR / "period_ranking_summary.json"
 
-DEFAULT_START_SOL = 107
-DEFAULT_END_SOL = 250
+# None means automatic detection from the supplied reports.
+# Explicit CLI arguments override automatic detection.
+DEFAULT_START_SOL = None
+DEFAULT_END_SOL = None
+
 DEFAULT_WINDOW_SIZE = 10
+
+# Six required MEDA products.
+# ENG is intentionally optional and does not affect availability scoring.
+DEFAULT_REQUIRED_PRODUCTS = (
+    "ATS",
+    "PS",
+    "RDS",
+    "RHS",
+    "TIRS",
+    "WS",
+)
+
+OPTIONAL_PRODUCTS = (
+    "ENG",
+)
 
 METRIC_NAMES = (
     "file_availability",
@@ -165,6 +183,84 @@ def write_json(path: Path, data: dict) -> None:
             ensure_ascii=False,
             allow_nan=False,
         )
+
+
+# ---------------------------------------------------------
+# Automatic Sol range detection
+# ---------------------------------------------------------
+
+def discover_sol_numbers(*report_rows: list[dict]) -> set[int]:
+    """
+    Collect valid Sol numbers from all supplied analyzer reports.
+
+    The function does not assume that a particular report is complete.
+    It uses the union of available Sol numbers across the reports.
+    """
+
+    discovered = set()
+
+    for rows in report_rows:
+        for row in rows:
+            sol = sol_number(row.get("sol_number"))
+
+            if sol is not None and sol >= 0:
+                discovered.add(sol)
+
+    return discovered
+
+
+def resolve_sol_range(
+    requested_start: int | None,
+    requested_end: int | None,
+    discovered_sols: set[int],
+) -> tuple[int, int, str]:
+    """
+    Resolve the analysis range.
+
+    If a boundary is not explicitly supplied, it is inferred from
+    the available report Sol numbers.
+
+    Explicit boundaries are preserved, including ranges extending
+    beyond the observed data.
+    """
+
+    if not discovered_sols:
+        raise ValueError(
+            "Cannot determine the Sol range: no valid Sol numbers "
+            "were found in the supplied analyzer reports."
+        )
+
+    observed_start = min(discovered_sols)
+    observed_end = max(discovered_sols)
+
+    start_sol = (
+        requested_start
+        if requested_start is not None
+        else observed_start
+    )
+
+    end_sol = (
+        requested_end
+        if requested_end is not None
+        else observed_end
+    )
+
+    if requested_start is not None and requested_end is not None:
+        source = "explicit_cli"
+    elif requested_start is not None:
+        source = "explicit_start_auto_end"
+    elif requested_end is not None:
+        source = "auto_start_explicit_end"
+    else:
+        source = "automatic_from_reports"
+
+    if start_sol < 0 or end_sol < 0:
+        raise ValueError("Sol numbers cannot be negative.")
+
+    if start_sol > end_sol:
+        raise ValueError("Start Sol cannot exceed End Sol.")
+
+    return start_sol, end_sol, source
 
 
 # ---------------------------------------------------------
@@ -428,8 +524,6 @@ def analyse_sync_pairs(rows: list[dict]) -> dict:
         if matched is not None and matched >= 0:
             item["matched_timestamps"] += matched
 
-        # Current Synchronization Analyzer schema uses
-        # 'overlap_duration', not 'overlap_duration_seconds'.
         overlap = safe_float(row.get("overlap_duration"))
 
         if overlap is not None and overlap >= 0:
@@ -505,19 +599,22 @@ def calculate_sol_metrics(
     sync_file_data = sync_files.get(sol, {})
     sync_pair_data = sync_pairs.get(sol, {})
 
-    # File availability is unavailable unless the user explicitly
-    # defines the expected product set.
+    # Availability is calculated only against the configured required
+    # product set. Optional products such as ENG do not affect this score.
     file_score = None
+    available_products = inventory_data.get("products", set())
+
+    available_required_products = 0
 
     if required_products:
-        available_products = inventory_data.get("products", set())
-
-        available = sum(
+        available_required_products = sum(
             product in available_products
             for product in required_products
         )
 
-        file_score = available / len(required_products) * 100
+        file_score = (
+            available_required_products / len(required_products) * 100
+        )
 
     integrity_score, integrity_components = calculate_integrity(
         coverage_data,
@@ -552,8 +649,13 @@ def calculate_sol_metrics(
         "integrity_value_score": integrity_components.get("values"),
         "quality_indicator_score": quality_score,
         "synchronization_score": synchronization_score,
-        "available_products": len(inventory_data.get("products", set())),
+        "available_products": len(available_products),
+        "available_required_products": available_required_products,
         "required_products": len(required_products or []),
+        "optional_products_present": sum(
+            product in available_products
+            for product in OPTIONAL_PRODUCTS
+        ),
         "csv_files": inventory_data.get("csv_files", 0),
         "xml_files": inventory_data.get("xml_files", 0),
         "inventory_entries": inventory_data.get("inventory_entries", 0),
@@ -795,6 +897,7 @@ def build_summary(
     end_sol: int,
     window_size: int,
     required_products: list[str] | None,
+    required_products_source: str,
     min_sol_fraction: float,
     min_metrics: int,
 ) -> dict:
@@ -836,7 +939,11 @@ def build_summary(
         "comparison_group_count": len(groups),
         "ranking_weights": weights,
         "required_products": required_products,
-        "required_products_explicitly_configured": bool(required_products),
+        "required_products_source": required_products_source,
+        "required_products_explicitly_configured": (
+            required_products_source == "command_line"
+        ),
+        "optional_products": list(OPTIONAL_PRODUCTS),
         "min_sol_fraction": min_sol_fraction,
         "min_metrics": min_metrics,
         "best_ranked_window": single_global_best,
@@ -848,7 +955,8 @@ def build_summary(
             "Zero-weight metrics do not contribute to scores or comparison groups.",
             "Windows are ranked only against windows with the same available positively weighted metric set.",
             "Ranks from different comparison groups are not directly comparable.",
-            "File availability is unavailable unless required products are explicitly configured.",
+            "File availability is calculated against the configured required product set.",
+            "ENG is optional by default and does not affect the default file availability score.",
             "Continuity is excluded because the current gap_total_seconds field is not a defensible missing-duration estimate.",
             "Quality flag meanings are not inferred.",
             "Quality indicator scores use only documented XML numerical bounds.",
@@ -876,12 +984,41 @@ def run(args) -> dict:
     sync_file_rows = read_csv(Path(args.sync_files))
     sync_pair_rows = read_csv(Path(args.sync_pairs))
 
-    print("Aggregating analyzer reports...")
+    # Detect the available Sol range from the union of all reports.
+    discovered_sols = discover_sol_numbers(
+        inventory_rows,
+        coverage_rows,
+        quality_rows,
+        sync_file_rows,
+        sync_pair_rows,
+    )
+
+    if not discovered_sols:
+        raise ValueError(
+            "No valid Sol numbers were found in the supplied reports. "
+            "Check the report paths and sol_number columns."
+        )
+
+    observed_start = min(discovered_sols)
+    observed_end = max(discovered_sols)
+
+    start_sol, end_sol, sol_range_source = resolve_sol_range(
+        args.start_sol,
+        args.end_sol,
+        discovered_sols,
+    )
+
+    print("\nSol range configuration:")
+    print(f"Observed report range: Sol {observed_start}-{observed_end}")
+    print(f"Analysis range: Sol {start_sol}-{end_sol}")
+    print(f"Range source: {sol_range_source}")
+
+    print("\nAggregating analyzer reports...")
 
     inventory = analyse_inventory(
         inventory_rows,
-        args.start_sol,
-        args.end_sol,
+        start_sol,
+        end_sol,
     )
 
     coverage = analyse_coverage(coverage_rows)
@@ -889,9 +1026,12 @@ def run(args) -> dict:
     sync_files = analyse_sync_files(sync_file_rows)
     sync_pairs = analyse_sync_pairs(sync_pair_rows)
 
-    required_products = None
-
-    if args.required_products is not None:
+    # Use the six required products by default.
+    # A supplied CLI list overrides the defaults.
+    if args.required_products is None:
+        required_products = list(DEFAULT_REQUIRED_PRODUCTS)
+        required_products_source = "default_configuration"
+    else:
         products = {
             str(product).strip().upper()
             for product in args.required_products
@@ -905,6 +1045,12 @@ def run(args) -> dict:
             )
 
         required_products = sorted(products)
+        required_products_source = "command_line"
+
+    print("\nProduct availability configuration:")
+    print(f"Required products: {', '.join(required_products)}")
+    print(f"Optional products: {', '.join(OPTIONAL_PRODUCTS)}")
+    print(f"Configuration source: {required_products_source}")
 
     weights = normalized_weights({
         "file_availability": args.weight_files,
@@ -918,11 +1064,11 @@ def run(args) -> dict:
         "values": args.integrity_values,
     })
 
-    print("Calculating per-Sol metrics...")
+    print("\nCalculating per-Sol metrics...")
 
     sol_metrics = {}
 
-    for sol in range(args.start_sol, args.end_sol + 1):
+    for sol in range(start_sol, end_sol + 1):
         sol_metrics[sol] = calculate_sol_metrics(
             sol,
             inventory,
@@ -935,12 +1081,12 @@ def run(args) -> dict:
         )
 
     windows = build_windows(
-        args.start_sol,
-        args.end_sol,
+        start_sol,
+        end_sol,
         args.window_size,
     )
 
-    print("Evaluating candidate windows...")
+    print("\nEvaluating candidate windows...")
 
     ranking_rows = []
 
@@ -966,13 +1112,27 @@ def run(args) -> dict:
     summary = build_summary(
         ranking_rows,
         weights,
-        args.start_sol,
-        args.end_sol,
+        start_sol,
+        end_sol,
         args.window_size,
         required_products,
+        required_products_source,
         args.min_sol_fraction,
         args.min_metrics,
     )
+
+    # Record both the detected data range and the selected analysis range.
+    summary["sol_range_detection"] = {
+        "source": sol_range_source,
+        "observed_start": observed_start,
+        "observed_end": observed_end,
+        "observed_sol_count": len(discovered_sols),
+        "analysis_start": start_sol,
+        "analysis_end": end_sol,
+        "automatic_detection_used": (
+            args.start_sol is None or args.end_sol is None
+        ),
+    }
 
     summary["sol_metrics"] = {
         str(sol): metrics
@@ -990,6 +1150,10 @@ def run(args) -> dict:
     write_json(summary_path, summary)
 
     print("\nPeriod ranking completed.")
+    print(f"Observed Sol range: {observed_start}-{observed_end}")
+    print(f"Analysis Sol range: {start_sol}-{end_sol}")
+    print(f"Range source: {sol_range_source}")
+    print(f"Required products: {len(required_products)}")
     print(f"Candidate windows: {len(ranking_rows)}")
     print(f"Rankable windows: {summary['rankable_windows']}")
     print(f"Comparison groups: {summary['comparison_group_count']}")
@@ -1036,8 +1200,20 @@ def parse_args():
     parser.add_argument("--output", default=str(DEFAULT_RANKING))
     parser.add_argument("--summary", default=str(DEFAULT_SUMMARY))
 
-    parser.add_argument("--start-sol", type=int, default=DEFAULT_START_SOL)
-    parser.add_argument("--end-sol", type=int, default=DEFAULT_END_SOL)
+    parser.add_argument(
+        "--start-sol",
+        type=int,
+        default=DEFAULT_START_SOL,
+        help="First Sol to analyse. Defaults to automatic detection.",
+    )
+
+    parser.add_argument(
+        "--end-sol",
+        type=int,
+        default=DEFAULT_END_SOL,
+        help="Last Sol to analyse. Defaults to automatic detection.",
+    )
+
     parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE)
 
     parser.add_argument("--min-sol-fraction", type=float, default=0.5)
@@ -1047,7 +1223,10 @@ def parse_args():
         "--required-products",
         nargs="*",
         default=None,
-        help="Explicit product codes required for file availability scoring.",
+        help=(
+            "Override the default required product codes "
+            "(ATS PS RDS RHS TIRS WS). ENG is optional by default."
+        ),
     )
 
     parser.add_argument("--weight-files", type=float, default=0.20)
@@ -1060,10 +1239,17 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.start_sol < 0 or args.end_sol < 0:
-        parser.error("Sol numbers cannot be negative.")
+    if args.start_sol is not None and args.start_sol < 0:
+        parser.error("Start Sol cannot be negative.")
 
-    if args.start_sol > args.end_sol:
+    if args.end_sol is not None and args.end_sol < 0:
+        parser.error("End Sol cannot be negative.")
+
+    if (
+        args.start_sol is not None
+        and args.end_sol is not None
+        and args.start_sol > args.end_sol
+    ):
         parser.error("Start Sol cannot exceed End Sol.")
 
     if args.window_size < 1:
@@ -1103,7 +1289,7 @@ def parse_args():
 
     if args.required_products is not None:
         products = [
-            product.strip()
+            product.strip().upper()
             for product in args.required_products
             if product.strip()
         ]

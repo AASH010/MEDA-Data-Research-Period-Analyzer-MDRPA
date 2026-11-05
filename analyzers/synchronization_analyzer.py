@@ -113,7 +113,7 @@ def safe_float(value: Any) -> float | None:
 def safe_int(value: Any, default: int = -1) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -123,7 +123,7 @@ def get_sol_number(value: Any) -> int | None:
 
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         pass
 
     match = SOL_PATTERN.match(str(value).strip())
@@ -140,6 +140,28 @@ def is_missing(value: Any) -> bool:
         value is None
         or str(value).strip().casefold() in MISSING_TEXT
     )
+
+
+def get_metadata_relative_path(record: dict) -> str:
+    """
+    Prefer the XML parser's source_relative_path.
+
+    Keep relative_path as a compatibility fallback for
+    older metadata records.
+    """
+    return str(
+        record.get("source_relative_path")
+        or record.get("relative_path")
+        or ""
+    ).strip()
+
+
+def get_inventory_relative_path(record: dict) -> str:
+    return str(
+        record.get("relative_path")
+        or record.get("source_relative_path")
+        or ""
+    ).strip()
 
 
 # ---------------------------------------------------------
@@ -206,8 +228,10 @@ def metadata_sol_number(record: dict) -> int | None:
 
 def build_metadata_index(records: list[dict]) -> dict:
     """
-    Keep all matches instead of silently overwriting records
-    that have the same filename stem.
+    Keep all metadata matches.
+
+    Do not silently overwrite records that share a filename stem
+    or relative path.
     """
 
     by_sol_name = defaultdict(list)
@@ -217,7 +241,7 @@ def build_metadata_index(records: list[dict]) -> dict:
     for record in records:
         source_file = str(
             record.get("source_file") or ""
-        )
+        ).strip()
 
         if not source_file:
             continue
@@ -230,10 +254,12 @@ def build_metadata_index(records: list[dict]) -> dict:
 
         by_stem[stem].append(record)
 
-        relative_path = record.get("relative_path")
+        relative_path = get_metadata_relative_path(record)
 
         if relative_path:
-            by_path[normalize_path(relative_path)].append(record)
+            by_path[
+                normalize_path(relative_path)
+            ].append(record)
 
     return {
         "by_sol_name": by_sol_name,
@@ -249,7 +275,7 @@ def find_metadata_record(
 
     filename = str(
         inventory_row.get("filename") or ""
-    )
+    ).strip()
 
     if not filename:
         return None, "missing_inventory_filename"
@@ -257,14 +283,21 @@ def find_metadata_record(
     stem = Path(filename).stem.casefold()
 
     # Priority 1: exact relative path.
-    relative_path = inventory_row.get("relative_path")
+    relative_path = get_inventory_relative_path(
+        inventory_row
+    )
 
     if relative_path:
+        csv_relative = Path(relative_path)
+
         xml_relative = normalize_path(
-            Path(str(relative_path)).with_suffix(".xml")
+            csv_relative.with_suffix(".xml")
         )
 
-        matches = index["by_path"].get(xml_relative, [])
+        matches = index["by_path"].get(
+            xml_relative,
+            [],
+        )
 
         if len(matches) == 1:
             return matches[0], "matched_by_relative_path"
@@ -322,10 +355,12 @@ def resolve_csv_path(
     if not filename:
         return None
 
-    relative_path = inventory_row.get("relative_path")
+    relative_path = get_inventory_relative_path(
+        inventory_row
+    )
 
     if relative_path:
-        candidate = input_root / Path(str(relative_path))
+        candidate = input_root / Path(relative_path)
 
         if candidate.is_file():
             return candidate
@@ -375,31 +410,53 @@ def build_column_mapping(
     fields: list[dict],
     has_header: Any,
 ) -> tuple[dict[int, int] | None, bool, str]:
+    """
+    Build a safe XML-field-to-CSV-column mapping.
+
+    Supported mapping strategies:
+
+    1. Exact header match.
+    2. Reordered unique headers.
+    3. Validated RHS duplicate XML names using positional mapping.
+    4. Validated WS aliases at the exact known positions.
+    5. Positional mapping only when XML explicitly states
+       that the CSV has no header.
+
+    Unknown header status is not treated as proof of a
+    headerless CSV.
+    """
+
+    if not fields:
+        return None, False, "no_xml_fields"
 
     field_names = [
         norm(field.get("name") or "")
         for field in fields
     ]
 
-    if not field_names or any(not name for name in field_names):
+    if any(not name for name in field_names):
         return None, False, "invalid_xml_field_names"
-
-    if len(set(field_names)) != len(field_names):
-        return None, False, "duplicate_xml_field_names"
 
     header_names = [
         norm(value)
         for value in first_row
     ]
 
+    if not header_names:
+        return None, False, "empty_csv_header"
+
+    if len(header_names) != len(field_names):
+        return None, False, "column_count_mismatch"
+
+    # CSV header names must be unique for name-based mapping.
     if len(set(header_names)) != len(header_names):
         return None, False, "duplicate_csv_header_names"
 
-    positions = {
-        name: index
-        for index, name in enumerate(header_names)
-        if name
-    }
+    field_counts = Counter(field_names)
+    has_duplicate_xml_names = any(
+        count > 1
+        for count in field_counts.values()
+    )
 
     # Exact header match.
     if header_names == field_names:
@@ -409,7 +466,129 @@ def build_column_mapping(
             "header_exact_match",
         )
 
-    # Header exists, but the columns are reordered.
+    # -----------------------------------------------------
+    # WS-specific aliases.
+    #
+    # Expected alias names are normalized using the same
+    # function as XML and CSV field names.
+    # Exactly 18 fields are required.
+    # Only positions 15 and 16 may differ.
+    # -----------------------------------------------------
+
+    if (
+        len(fields) == 18
+        and not has_duplicate_xml_names
+    ):
+        expected_aliases = {
+            15: (
+                norm("BOOM1_ALG_IN_STABLE_STATE"),
+                norm("BOOM1_ALG_STATE_STABLE"),
+            ),
+            16: (
+                norm("BOOM2_ALG_IN_STABLE_STATE"),
+                norm("BOOM2_ALG_STATE_STABLE"),
+            ),
+        }
+
+        differences = [
+            index
+            for index, (xml_name, csv_name)
+            in enumerate(zip(field_names, header_names))
+            if xml_name != csv_name
+        ]
+
+        aliases_match = (
+            set(differences) == {15, 16}
+            and all(
+                (
+                    field_names[index],
+                    header_names[index],
+                ) == expected_aliases[index]
+                for index in differences
+            )
+        )
+
+        if aliases_match:
+            return (
+                {index: index for index in range(len(fields))},
+                True,
+                "header_positional_ws_aliases",
+            )
+
+    # -----------------------------------------------------
+    # RHS duplicate XML names.
+    #
+    # Safe positional mapping requires:
+    # - same XML and CSV column count;
+    # - unique CSV header names;
+    # - every non-duplicate XML field matches the CSV
+    #   header at the same position;
+    # - duplicate XML-name positions have distinct,
+    #   non-empty CSV header names.
+    #
+    # This does not rename or modify XML source metadata.
+    # -----------------------------------------------------
+
+    if has_duplicate_xml_names:
+        duplicate_positions = {
+            name: [
+                index
+                for index, candidate in enumerate(field_names)
+                if candidate == name
+            ]
+            for name, count in field_counts.items()
+            if count > 1
+        }
+
+        all_duplicate_indices = {
+            index
+            for positions in duplicate_positions.values()
+            for index in positions
+        }
+
+        non_duplicate_positions_match = all(
+            field_names[index] == header_names[index]
+            for index in range(len(fields))
+            if index not in all_duplicate_indices
+        )
+
+        duplicate_headers_are_distinct = all(
+            len({
+                header_names[index]
+                for index in positions
+            }) == len(positions)
+            and all(
+                header_names[index]
+                for index in positions
+            )
+            for positions in duplicate_positions.values()
+        )
+
+        if (
+            non_duplicate_positions_match
+            and duplicate_headers_are_distinct
+        ):
+            return (
+                {index: index for index in range(len(fields))},
+                True,
+                "header_positional_duplicate_xml_names",
+            )
+
+        return (
+            None,
+            False,
+            "duplicate_xml_names_mapping_ambiguous",
+        )
+
+    # -----------------------------------------------------
+    # Reordered unique headers.
+    # -----------------------------------------------------
+
+    positions = {
+        name: index
+        for index, name in enumerate(header_names)
+    }
+
     if all(name in positions for name in field_names):
         mapping = {
             xml_index: positions[name]
@@ -418,32 +597,34 @@ def build_column_mapping(
 
         return mapping, True, "header_reordered_mapped"
 
+    # Explicitly declared header but no safe mapping.
     if has_header is True:
         return None, False, "header_mapping_ambiguous"
 
-    # Do not silently assume that a partially matching first row
-    # is either a header or a data row.
+    # Partial match: cannot safely decide whether the first
+    # row is a header or data.
     if set(field_names).intersection(header_names):
         return None, False, "partial_header_match"
 
-    # Headerless positional mapping.
-    if len(first_row) != len(fields):
-        return None, False, "column_count_mismatch"
-
+    # Unknown header status is not sufficient evidence
+    # for positional no-header mapping.
     if has_header is None:
-        status = "positional_header_unknown"
-    else:
-        status = "positional_no_header"
+        return None, False, "header_status_unknown"
 
-    return (
-        {index: index for index in range(len(fields))},
-        False,
-        status,
-    )
+    # Positional mapping is allowed only when XML explicitly
+    # declares that the CSV has no header.
+    if has_header is False:
+        return (
+            {index: index for index in range(len(fields))},
+            False,
+            "positional_no_header",
+        )
+
+    return None, False, "header_mapping_ambiguous"
 
 
 # ---------------------------------------------------------
-# File-level timestamp analysis
+# File-level report helpers
 # ---------------------------------------------------------
 
 def empty_file_report(
@@ -482,6 +663,10 @@ def empty_file_report(
     }
 
 
+# ---------------------------------------------------------
+# File-level timestamp analysis
+# ---------------------------------------------------------
+
 def analyse_timestamp_file(
     csv_path: Path,
     inventory_row: dict,
@@ -502,7 +687,9 @@ def analyse_timestamp_file(
         )
         return report, []
 
-    fields = ordered_fields(xml_record.get("fields") or [])
+    fields = ordered_fields(
+        xml_record.get("fields") or []
+    )
 
     if not fields:
         report["analysis_status"] = "no_xml_fields"
@@ -533,6 +720,7 @@ def analyse_timestamp_file(
 
     timestamps = []
     previous_timestamp = None
+
     out_of_order_count = 0
     total_rows = 0
     missing_count = 0
@@ -576,8 +764,7 @@ def analyse_timestamp_file(
                 )
                 return report, []
 
-            # Stream rows instead of expanding the entire reader
-            # into a list when the CSV has no header.
+            # Stream rows without expanding the complete reader.
             rows = reader
 
             if not skip_header:
@@ -585,7 +772,10 @@ def analyse_timestamp_file(
 
             for row in rows:
 
-                if not row or not any(str(value).strip() for value in row):
+                if not row or not any(
+                    str(value).strip()
+                    for value in row
+                ):
                     continue
 
                 total_rows += 1
@@ -602,7 +792,11 @@ def analyse_timestamp_file(
 
                 try:
                     parsed_value = time_parser(raw_value)
-                except (TypeError, ValueError, OverflowError):
+                except (
+                    TypeError,
+                    ValueError,
+                    OverflowError,
+                ):
                     parsed_value = None
 
                 if parsed_value is None:
@@ -659,7 +853,9 @@ def analyse_timestamp_file(
         else ""
     )
 
-    notes = [f"Column mapping: {mapping_status}."]
+    notes = [
+        f"Column mapping: {mapping_status}."
+    ]
 
     if time_kind != "utc":
         notes.append(
@@ -706,8 +902,8 @@ def match_one_to_one(
     """
     Match sorted timestamp occurrences one-to-one.
 
-    A timestamp occurrence can be used in at most one match.
-    Duplicate timestamps are retained as separate observations.
+    Each timestamp occurrence can participate in at most
+    one match. Duplicate timestamps remain separate observations.
 
     The two-pointer strategy produces a maximum-cardinality
     matching for sorted one-dimensional values under a fixed
@@ -799,7 +995,7 @@ def compare_timestamp_series(
         result["notes"] = "The timestamp series do not overlap."
         return result
 
-    # Only observations inside the common interval are compared.
+    # Compare only observations inside the common interval.
     first_overlap = [
         value for value in first
         if overlap_start <= value <= overlap_end
@@ -903,7 +1099,7 @@ def run_analysis(
 
     if not math.isfinite(tolerance) or tolerance < 0:
         raise ValueError(
-            "Tolerance must be finite and greater than or equal to zero."
+            "Tolerance must be finite and non-negative."
         )
 
     metadata_index = build_metadata_index(metadata_records)
@@ -922,7 +1118,10 @@ def run_analysis(
     series_by_sol = defaultdict(list)
     processed_paths = set()
 
-    for position, inventory_row in enumerate(csv_rows, start=1):
+    for position, inventory_row in enumerate(
+        csv_rows,
+        start=1,
+    ):
 
         csv_path = resolve_csv_path(
             input_root,
@@ -939,7 +1138,9 @@ def run_analysis(
             )
             continue
 
-        resolved_path = str(csv_path.resolve()).casefold()
+        resolved_path = str(
+            csv_path.resolve()
+        ).casefold()
 
         if resolved_path in processed_paths:
             continue
@@ -961,7 +1162,19 @@ def run_analysis(
             )
             continue
 
-        if csv_path.stat().st_size == 0:
+        try:
+            file_size = csv_path.stat().st_size
+        except OSError as error:
+            file_reports.append(
+                empty_file_report(
+                    inventory_row,
+                    "file_stat_error",
+                    str(error),
+                )
+            )
+            continue
+
+        if file_size == 0:
             file_reports.append(
                 empty_file_report(
                     inventory_row,
@@ -985,13 +1198,19 @@ def run_analysis(
 
         if metadata_status != "matched_by_sol_and_name":
             previous_notes = report.get("notes", "")
+
             report["notes"] = (
-                previous_notes + " " if previous_notes else ""
+                previous_notes + " "
+                if previous_notes
+                else ""
             ) + f"Metadata matching method: {metadata_status}."
 
         file_reports.append(report)
 
-        if timestamps and report["analysis_status"] == "analysed":
+        if (
+            timestamps
+            and report["analysis_status"] == "analysed"
+        ):
 
             sol_number = get_sol_number(
                 inventory_row.get("sol_number")
@@ -1030,8 +1249,7 @@ def run_analysis(
             first_product = first["product_code"]
             second_product = second["product_code"]
 
-            # Product-to-product comparison requires two known,
-            # different product codes.
+            # Pair comparisons require two known, different products.
             if not first_product or not second_product:
                 continue
 
@@ -1115,6 +1333,17 @@ def build_summary(
         for row in pair_reports
     )
 
+    mapping_status_counts = Counter()
+
+    for row in analysed_files:
+        match = re.search(
+            r"Column mapping: ([^.]+)\.",
+            str(row.get("notes") or ""),
+        )
+
+        if match:
+            mapping_status_counts[match.group(1)] += 1
+
     return {
         "analyzer": "MEDA Synchronization Analyzer",
         "generated_at_utc": datetime.now(
@@ -1131,6 +1360,7 @@ def build_summary(
             len(file_reports) - len(analysed_files)
         ),
         "file_status_counts": dict(file_status_counts),
+        "mapping_status_counts": dict(mapping_status_counts),
         "total_product_pairs": len(pair_reports),
         "analysed_pairs": len(analysed_pairs),
         "pair_status_counts": dict(pair_status_counts),
@@ -1151,6 +1381,9 @@ def build_summary(
             "Temporal overlap does not establish complete measurement coverage.",
             "Duplicate timestamp occurrences are retained and matched individually.",
             "Files with missing or identical product codes are excluded from product-pair comparisons.",
+            "Unknown CSV header status is not treated as proof of a headerless file.",
+            "RHS duplicate XML names are mapped positionally only when all non-duplicate positions match.",
+            "WS aliases are accepted only at the two explicitly validated field positions.",
         ],
     }
 
@@ -1312,6 +1545,9 @@ def main() -> None:
     print(f"Analysed files: {summary['analysed_files']}")
     print(f"Product pairs: {len(pair_reports)}")
     print(f"Analysed pairs: {summary['analysed_pairs']}")
+    print(
+        f"Mapping statuses: {summary['mapping_status_counts']}"
+    )
     print(f"File report: {args.file_report.resolve()}")
     print(f"Pair report: {args.pair_report.resolve()}")
     print(f"Summary: {args.summary.resolve()}")
