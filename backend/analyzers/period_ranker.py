@@ -7,17 +7,6 @@ Compares candidate Sol windows using available MEDA analysis reports.
 This is an exploratory comparison tool, not a scientific validation
 or certification tool.
 
-Inputs:
-    output/file_inventory.csv
-    output/coverage_report.csv
-    output/quality_field_report.csv
-    output/synchronization_file_report.csv
-    output/synchronization_pair_report.csv
-
-Outputs:
-    output/period_ranking.csv
-    output/period_ranking_summary.json
-
 Python standard library only.
 """
 
@@ -44,15 +33,11 @@ DEFAULT_SYNC_PAIRS = DEFAULT_OUTPUT_DIR / "synchronization_pair_report.csv"
 DEFAULT_RANKING = DEFAULT_OUTPUT_DIR / "period_ranking.csv"
 DEFAULT_SUMMARY = DEFAULT_OUTPUT_DIR / "period_ranking_summary.json"
 
-# None means automatic detection from the supplied reports.
-# Explicit CLI arguments override automatic detection.
 DEFAULT_START_SOL = None
 DEFAULT_END_SOL = None
 
 DEFAULT_WINDOW_SIZE = 10
 
-# Six required MEDA products.
-# ENG is intentionally optional and does not affect availability scoring.
 DEFAULT_REQUIRED_PRODUCTS = (
     "ATS",
     "PS",
@@ -62,9 +47,7 @@ DEFAULT_REQUIRED_PRODUCTS = (
     "WS",
 )
 
-OPTIONAL_PRODUCTS = (
-    "ENG",
-)
+OPTIONAL_PRODUCTS = ("ENG",)
 
 METRIC_NAMES = (
     "file_availability",
@@ -87,6 +70,51 @@ DEFAULT_INTEGRITY_WEIGHTS = {
 
 
 # ---------------------------------------------------------
+# Input report schemas
+# ---------------------------------------------------------
+
+REPORT_REQUIRED_COLUMNS = {
+    "inventory": {
+        "sol_number",
+        "extension",
+        "product_code",
+    },
+    "coverage": {
+        "sol_number",
+        "row_count",
+        "parsed_timestamp_count",
+        "missing_timestamp_count",
+        "invalid_timestamp_count",
+        "numeric_value_count",
+        "numeric_missing_count",
+        "numeric_invalid_count",
+    },
+    "quality": {
+        "sol_number",
+        "field_type",
+        "analysis_status",
+        "numeric_count",
+        "below_valid_minimum",
+        "above_valid_maximum",
+        "valid_minimum",
+        "valid_maximum",
+    },
+    "sync_files": {
+        "sol_number",
+        "analysis_status",
+        "parsed_timestamps",
+    },
+    "sync_pairs": {
+        "sol_number",
+        "comparison_status",
+        "match_rate_sparser_percent",
+        "matched_timestamps",
+        "overlap_duration",
+    },
+}
+
+
+# ---------------------------------------------------------
 # General helpers
 # ---------------------------------------------------------
 
@@ -105,10 +133,7 @@ def safe_float(value: Any) -> float | None:
 def safe_int(value: Any) -> int | None:
     number = safe_float(value)
 
-    if number is None:
-        return None
-
-    if not number.is_integer():
+    if number is None or not number.is_integer():
         return None
 
     return int(number)
@@ -118,7 +143,11 @@ def sol_number(value: Any) -> int | None:
     return safe_int(value)
 
 
-def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
+def clamp(
+    value: float,
+    low: float = 0.0,
+    high: float = 100.0,
+) -> float:
     return max(low, min(high, value))
 
 
@@ -129,7 +158,9 @@ def average(values: list[float]) -> float | None:
     return sum(values) / len(values)
 
 
-def normalized_weights(weights: dict[str, float]) -> dict[str, float]:
+def normalized_weights(
+    weights: dict[str, float],
+) -> dict[str, float]:
     cleaned = {}
 
     for key, value in weights.items():
@@ -153,23 +184,59 @@ def normalized_weights(weights: dict[str, float]) -> dict[str, float]:
     }
 
 
-def read_csv(path: Path) -> list[dict]:
+def read_csv(
+    path: Path,
+    required_columns: set[str] | None = None,
+) -> list[dict]:
+    """
+    Read a CSV report and validate its header when requested.
+
+    Missing reports are treated as unavailable reports.
+    Existing reports with invalid headers raise ValueError.
+    """
+    path = Path(path)
+
     if not path.exists():
-        print(f"WARNING: Report not found; treating as unavailable: {path}")
+        print(
+            "WARNING: Report not found; treating as unavailable: "
+            f"{path}"
+        )
         return []
 
-    with path.open(
-        "r",
-        encoding="utf-8-sig",
-        newline="",
-    ) as handle:
-        reader = csv.DictReader(handle)
+    try:
+        with path.open(
+            "r",
+            encoding="utf-8-sig",
+            newline="",
+        ) as handle:
+            reader = csv.DictReader(handle)
 
-        if not reader.fieldnames:
-            print(f"WARNING: Report has no header: {path}")
-            return []
+            if not reader.fieldnames:
+                raise ValueError(
+                    f"Report has no header: {path}"
+                )
 
-        return list(reader)
+            headers = {
+                str(name).strip()
+                for name in reader.fieldnames
+                if name is not None
+            }
+
+            if required_columns:
+                missing = sorted(required_columns - headers)
+
+                if missing:
+                    raise ValueError(
+                        f"Invalid report schema in {path}. "
+                        f"Missing required columns: {', '.join(missing)}"
+                    )
+
+            return list(reader)
+
+    except csv.Error as error:
+        raise ValueError(
+            f"Could not read CSV report {path}: {error}"
+        ) from error
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -189,14 +256,12 @@ def write_json(path: Path, data: dict) -> None:
 # Automatic Sol range detection
 # ---------------------------------------------------------
 
-def discover_sol_numbers(*report_rows: list[dict]) -> set[int]:
+def discover_sol_numbers(
+    *report_rows: list[dict],
+) -> set[int]:
     """
-    Collect valid Sol numbers from all supplied analyzer reports.
-
-    The function does not assume that a particular report is complete.
-    It uses the union of available Sol numbers across the reports.
+    Collect valid Sol numbers from the union of supplied reports.
     """
-
     discovered = set()
 
     for rows in report_rows:
@@ -214,15 +279,6 @@ def resolve_sol_range(
     requested_end: int | None,
     discovered_sols: set[int],
 ) -> tuple[int, int, str]:
-    """
-    Resolve the analysis range.
-
-    If a boundary is not explicitly supplied, it is inferred from
-    the available report Sol numbers.
-
-    Explicit boundaries are preserved, including ranges extending
-    beyond the observed data.
-    """
 
     if not discovered_sols:
         raise ValueError(
@@ -332,7 +388,11 @@ def analyse_inventory(
             .lstrip(".")
         )
 
-        product = str(row.get("product_code") or "").strip().upper()
+        product = (
+            str(row.get("product_code") or "")
+            .strip()
+            .upper()
+        )
 
         item = result[sol]
         item["inventory_entries"] += 1
@@ -346,7 +406,9 @@ def analyse_inventory(
         elif extension == "xml":
             item["xml_files"] += 1
 
-        pair_status = str(row.get("pair_status") or "").lower()
+        pair_status = str(
+            row.get("pair_status") or ""
+        ).lower()
 
         if "missing" in pair_status:
             item["missing_pairs"] += 1
@@ -404,7 +466,13 @@ def analyse_coverage(rows: list[dict]) -> dict:
 # ---------------------------------------------------------
 
 def analyse_quality(rows: list[dict]) -> dict:
+    """
+    Aggregate documented XML range-check information.
 
+    Only field_type == range_check contributes to the range
+    indicator. Other categories may describe the same field and
+    must not duplicate its range statistics.
+    """
     result = defaultdict(lambda: {
         "field_reports": 0,
         "analysed_fields": 0,
@@ -423,16 +491,28 @@ def analyse_quality(rows: list[dict]) -> dict:
         item = result[sol]
         item["field_reports"] += 1
 
-        if str(row.get("analysis_status") or "").lower() != "analysed":
+        if (
+            str(row.get("analysis_status") or "")
+            .strip()
+            .casefold()
+            != "analysed"
+        ):
             continue
 
         item["analysed_fields"] += 1
 
+        field_type = (
+            str(row.get("field_type") or "")
+            .strip()
+            .casefold()
+        )
+
+        if field_type != "range_check":
+            continue
+
         minimum = safe_float(row.get("valid_minimum"))
         maximum = safe_float(row.get("valid_maximum"))
 
-        # Only fields with at least one documented bound are
-        # considered range-checked.
         if minimum is None and maximum is None:
             continue
 
@@ -448,6 +528,10 @@ def analyse_quality(rows: list[dict]) -> dict:
             or below < 0
             or above < 0
         ):
+            continue
+
+        # A row with impossible out-of-range counts is not used.
+        if below + above > numeric_count:
             continue
 
         item["range_checked_fields"] += 1
@@ -479,7 +563,12 @@ def analyse_sync_files(rows: list[dict]) -> dict:
         item = result[sol]
         item["files"] += 1
 
-        if str(row.get("analysis_status") or "").lower() == "analysed":
+        if (
+            str(row.get("analysis_status") or "")
+            .strip()
+            .casefold()
+            == "analysed"
+        ):
             item["analysed_files"] += 1
 
             count = safe_int(row.get("parsed_timestamps"))
@@ -509,12 +598,19 @@ def analyse_sync_pairs(rows: list[dict]) -> dict:
         item = result[sol]
         item["pairs"] += 1
 
-        if str(row.get("comparison_status") or "").lower() != "analysed":
+        if (
+            str(row.get("comparison_status") or "")
+            .strip()
+            .casefold()
+            != "analysed"
+        ):
             continue
 
         item["analysed_pairs"] += 1
 
-        rate = safe_float(row.get("match_rate_sparser_percent"))
+        rate = safe_float(
+            row.get("match_rate_sparser_percent")
+        )
 
         if rate is not None and 0 <= rate <= 100:
             item["match_rates"].append(rate)
@@ -591,6 +687,7 @@ def calculate_sol_metrics(
     sync_pairs: dict,
     required_products: list[str] | None,
     integrity_weights: dict[str, float],
+    inventory_available: bool = True,
 ) -> dict:
 
     inventory_data = inventory.get(sol, {})
@@ -599,14 +696,13 @@ def calculate_sol_metrics(
     sync_file_data = sync_files.get(sol, {})
     sync_pair_data = sync_pairs.get(sol, {})
 
-    # Availability is calculated only against the configured required
-    # product set. Optional products such as ENG do not affect this score.
+    # Missing inventory report means unavailable, not zero availability.
     file_score = None
     available_products = inventory_data.get("products", set())
 
     available_required_products = 0
 
-    if required_products:
+    if inventory_available and required_products:
         available_required_products = sum(
             product in available_products
             for product in required_products
@@ -621,9 +717,7 @@ def calculate_sol_metrics(
         integrity_weights,
     )
 
-    # Range indicator only uses documented XML bounds.
     checked = quality_data.get("range_checked_values", 0)
-
     quality_score = None
 
     if checked > 0:
@@ -635,9 +729,6 @@ def calculate_sol_metrics(
         if 0 <= outside <= checked:
             quality_score = (checked - outside) / checked * 100
 
-    # Mean of available analysed pair-level match rates.
-    # Pair rates are not interpreted as a universal instrument
-    # synchronization quality measure.
     synchronization_score = average(
         sync_pair_data.get("match_rates", [])
     )
@@ -709,13 +800,11 @@ def aggregate_window(
 
     weighted_total = 0.0
     available_weight = 0.0
-
     reasons = []
 
     minimum_sols = math.ceil(min_sol_fraction * total_sols)
 
     for metric_name, field_name in metric_fields.items():
-
         values = [
             sol_metrics[sol][field_name]
             for sol in sols
@@ -741,9 +830,6 @@ def aggregate_window(
 
         weight = weights[metric_name]
 
-        # Zero-weight metrics are diagnostic only.
-        # They must not affect the final score, the metric count,
-        # or the comparison-group signature.
         if weight > 0:
             contributing_metrics.append(metric_name)
             weighted_total += score * weight
@@ -781,7 +867,6 @@ def aggregate_window(
     else:
         ranking_status = "rankable"
 
-    # Only positively weighted metrics define the comparison group.
     metric_signature = ",".join(contributing_metrics)
 
     result = {
@@ -817,11 +902,7 @@ def aggregate_window(
 def rank_windows(rows: list[dict]) -> list[dict]:
     """
     Rank only windows with the exact same available metric signature.
-
-    A rank in one comparison group must not be interpreted as
-    directly comparable to a rank in another group.
     """
-
     groups = defaultdict(list)
 
     for row in rows:
@@ -879,7 +960,6 @@ def write_ranking_csv(path: Path, rows: list[dict]) -> None:
         encoding="utf-8-sig",
         newline="",
     ) as handle:
-
         writer = csv.DictWriter(
             handle,
             fieldnames=RANKING_COLUMNS,
@@ -966,6 +1046,7 @@ def build_summary(
             "Synchronization scores are averages of available pair-level match rates and depend on sampling schedules and matching tolerance.",
             "Product availability does not establish measurement completeness.",
             "Candidate periods require further review before research use.",
+            "A missing inventory report makes file availability unavailable; it is not interpreted as zero product availability.",
         ],
     }
 
@@ -978,13 +1059,35 @@ def run(args) -> dict:
 
     print("Loading analysis reports...")
 
-    inventory_rows = read_csv(Path(args.inventory))
-    coverage_rows = read_csv(Path(args.coverage))
-    quality_rows = read_csv(Path(args.quality))
-    sync_file_rows = read_csv(Path(args.sync_files))
-    sync_pair_rows = read_csv(Path(args.sync_pairs))
+    inventory_path = Path(args.inventory)
 
-    # Detect the available Sol range from the union of all reports.
+    inventory_available = inventory_path.is_file()
+
+    inventory_rows = read_csv(
+        inventory_path,
+        REPORT_REQUIRED_COLUMNS["inventory"],
+    )
+
+    coverage_rows = read_csv(
+        Path(args.coverage),
+        REPORT_REQUIRED_COLUMNS["coverage"],
+    )
+
+    quality_rows = read_csv(
+        Path(args.quality),
+        REPORT_REQUIRED_COLUMNS["quality"],
+    )
+
+    sync_file_rows = read_csv(
+        Path(args.sync_files),
+        REPORT_REQUIRED_COLUMNS["sync_files"],
+    )
+
+    sync_pair_rows = read_csv(
+        Path(args.sync_pairs),
+        REPORT_REQUIRED_COLUMNS["sync_pairs"],
+    )
+
     discovered_sols = discover_sol_numbers(
         inventory_rows,
         coverage_rows,
@@ -1026,8 +1129,6 @@ def run(args) -> dict:
     sync_files = analyse_sync_files(sync_file_rows)
     sync_pairs = analyse_sync_pairs(sync_pair_rows)
 
-    # Use the six required products by default.
-    # A supplied CLI list overrides the defaults.
     if args.required_products is None:
         required_products = list(DEFAULT_REQUIRED_PRODUCTS)
         required_products_source = "default_configuration"
@@ -1078,6 +1179,7 @@ def run(args) -> dict:
             sync_pairs,
             required_products,
             integrity_weights,
+            inventory_available=inventory_available,
         )
 
     windows = build_windows(
@@ -1121,7 +1223,6 @@ def run(args) -> dict:
         args.min_metrics,
     )
 
-    # Record both the detected data range and the selected analysis range.
     summary["sol_range_detection"] = {
         "source": sol_range_source,
         "observed_start": observed_start,
@@ -1145,6 +1246,14 @@ def run(args) -> dict:
         "quality": args.quality,
         "sync_files": args.sync_files,
         "sync_pairs": args.sync_pairs,
+    }
+
+    summary["input_report_availability"] = {
+        "inventory": inventory_available,
+        "coverage": Path(args.coverage).is_file(),
+        "quality": Path(args.quality).is_file(),
+        "sync_files": Path(args.sync_files).is_file(),
+        "sync_pairs": Path(args.sync_pairs).is_file(),
     }
 
     write_json(summary_path, summary)
@@ -1214,7 +1323,11 @@ def parse_args():
         help="Last Sol to analyse. Defaults to automatic detection.",
     )
 
-    parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE)
+    parser.add_argument(
+        "--window-size",
+        type=int,
+        default=DEFAULT_WINDOW_SIZE,
+    )
 
     parser.add_argument("--min-sol-fraction", type=float, default=0.5)
     parser.add_argument("--min-metrics", type=int, default=3)
@@ -1259,7 +1372,9 @@ def parse_args():
         parser.error("min-sol-fraction must be finite.")
 
     if not 0 < args.min_sol_fraction <= 1:
-        parser.error("min-sol-fraction must be greater than 0 and at most 1.")
+        parser.error(
+            "min-sol-fraction must be greater than 0 and at most 1."
+        )
 
     if not 1 <= args.min_metrics <= len(METRIC_NAMES):
         parser.error(
@@ -1285,7 +1400,9 @@ def parse_args():
         parser.error("At least one ranking weight must be positive.")
 
     if sum(weight_values[4:]) <= 0:
-        parser.error("At least one integrity component weight must be positive.")
+        parser.error(
+            "At least one integrity component weight must be positive."
+        )
 
     if args.required_products is not None:
         products = [
@@ -1307,5 +1424,10 @@ def parse_args():
 if __name__ == "__main__":
     try:
         run(parse_args())
-    except (OSError, ValueError, csv.Error, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        ValueError,
+        csv.Error,
+        json.JSONDecodeError,
+    ) as error:
         raise SystemExit(f"ERROR: {error}")
