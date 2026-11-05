@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -6,9 +5,15 @@ import json
 import re
 import xml.etree.ElementTree as ET
 
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    from .meda_common import validate_field_metadata
+except ImportError:
+    from meda_common import validate_field_metadata
 
 
 SOL_PATTERN = re.compile(
@@ -58,6 +63,7 @@ INTERESTING_ELEMENTS = [
 
 def local_name(tag: str) -> str:
     """Remove the XML namespace from an element name."""
+
     if "}" in tag:
         return tag.rsplit("}", 1)[1]
 
@@ -394,7 +400,6 @@ def classify_candidate_fields(fields: list[dict]) -> dict:
             )
         )
 
-        # Normalize underscores and punctuation for keyword matching.
         searchable_text = re.sub(
             r"[^a-zA-Z0-9]+",
             " ",
@@ -537,8 +542,8 @@ def parse_xml_file(
     """
     Parse one XML file and return a metadata record.
 
-    XML parsing failures are recorded instead of stopping
-    the processing of the remaining files.
+    Structural metadata warnings are reported separately.
+    Original XML metadata is never automatically modified.
     """
 
     xml_path = Path(xml_path)
@@ -591,6 +596,8 @@ def parse_xml_file(
         "field_count": 0,
         "fields": [],
 
+        "metadata_warnings": [],
+
         # Header presence is not inferred from a generic XML Header element.
         "has_header": None,
         "header_status": "not_determined_from_label",
@@ -623,6 +630,12 @@ def parse_xml_file(
         record["field_count"] = len(fields)
         record["fields"] = fields
 
+        # Structural validation only.
+        # No scientific interpretation or automatic correction.
+        record["metadata_warnings"] = validate_field_metadata(
+            fields
+        )
+
         record["field_delimiter"] = record[
             "table_metadata"
         ].get("field_delimiter")
@@ -642,6 +655,66 @@ def parse_xml_file(
         record["parse_error"] = str(error)
 
     return record
+
+
+# --------------------------------------------------
+# Metadata Warning Summary
+# --------------------------------------------------
+
+def build_metadata_warning_summary(records: list[dict]) -> dict:
+    """
+    Summarize structural metadata warnings across XML records.
+
+    Warning counts are not scientific quality scores.
+    """
+
+    severity_counts = Counter()
+    code_counts = Counter()
+
+    files_with_warnings = 0
+    total_warnings = 0
+
+    for record in records:
+
+        warnings = record.get("metadata_warnings", [])
+
+        if warnings:
+            files_with_warnings += 1
+
+        for warning in warnings:
+
+            severity = warning.get(
+                "severity",
+                "unknown",
+            )
+
+            code = warning.get(
+                "code",
+                "unknown",
+            )
+
+            severity_counts[severity] += 1
+            code_counts[code] += 1
+            total_warnings += 1
+
+    return {
+        "files_with_metadata_warnings": files_with_warnings,
+        "total_metadata_warnings": total_warnings,
+
+        "metadata_warning_severity_counts": dict(
+            sorted(severity_counts.items())
+        ),
+
+        "metadata_warning_code_counts": dict(
+            sorted(code_counts.items())
+        ),
+
+        "interpretation": (
+            "Structural metadata findings only. "
+            "They do not establish measurement quality "
+            "or scientific validity."
+        ),
+    }
 
 
 # --------------------------------------------------
@@ -737,6 +810,10 @@ def build_metadata_inventory(
 
     failed = len(records) - successful
 
+    metadata_warning_summary = build_metadata_warning_summary(
+        records
+    )
+
     return {
         "tool": "MEDA Data Research & Period Analyzer",
         "module": "XML Parser",
@@ -751,6 +828,8 @@ def build_metadata_inventory(
             "xml_files_discovered": len(xml_files),
             "successfully_parsed": successful,
             "failed_to_parse": failed,
+
+            **metadata_warning_summary,
         },
 
         "records": records,
@@ -846,6 +925,21 @@ def main() -> None:
 
     print(
         f"Failed: {summary['failed_to_parse']}"
+    )
+
+    print(
+        "Files with metadata warnings: "
+        f"{summary['files_with_metadata_warnings']}"
+    )
+
+    print(
+        "Total metadata warnings: "
+        f"{summary['total_metadata_warnings']}"
+    )
+
+    print(
+        "Metadata warning severity counts: "
+        f"{summary['metadata_warning_severity_counts']}"
     )
 
     print(
