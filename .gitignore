@@ -1,0 +1,33 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Generated analysis output
+output/*
+!output/.gitkeep
+
+# Downloaded MEDA datasets
+input/*
+!input/.gitkeep
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak

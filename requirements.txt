@@ -1,0 +1,20 @@
+# MEDA Research Tool - Python Dependencies
+
+# Desktop GUI
+PySide6
+
+# Interactive charts and data visualization
+pyqtgraph
+
+# Numerical and scientific data processing
+numpy
+pandas
+
+# Configuration file support
+PyYAML
+
+# Date and time utilities
+python-dateutil
+
+# XML processing
+lxml
