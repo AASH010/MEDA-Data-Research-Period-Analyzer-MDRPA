@@ -11,20 +11,24 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .file_discovery import (
+        SOL_FOLDER_PATTERN as SOL_PATTERN,
+        PRODUCT_PATTERN,
+        get_sol_number as _shared_get_sol_number,
+        get_product_code as _shared_get_product_code,
+        discover_files,
+    )
     from .meda_common import validate_field_metadata
 except ImportError:
+    from file_discovery import (
+        SOL_FOLDER_PATTERN as SOL_PATTERN,
+        PRODUCT_PATTERN,
+        get_sol_number as _shared_get_sol_number,
+        get_product_code as _shared_get_product_code,
+        discover_files,
+    )
     from meda_common import validate_field_metadata
 
-
-SOL_PATTERN = re.compile(
-    r"^SOL[_-]?0*(\d+)$",
-    re.IGNORECASE,
-)
-
-PRODUCT_PATTERN = re.compile(
-    r"(?:^|_)CAL_([A-Z0-9]+)(?:_|\.|$)",
-    re.IGNORECASE,
-)
 
 FIELD_TAGS = {
     "field_delimited",
@@ -63,7 +67,6 @@ INTERESTING_ELEMENTS = [
 
 def local_name(tag: str) -> str:
     """Remove the XML namespace from an element name."""
-
     if "}" in tag:
         return tag.rsplit("}", 1)[1]
 
@@ -77,7 +80,6 @@ def element_to_dict(element: ET.Element) -> Any:
     Preserves attributes, nested elements, repeated elements,
     and element text.
     """
-
     result = {}
 
     for key, value in element.attrib.items():
@@ -92,7 +94,6 @@ def element_to_dict(element: ET.Element) -> Any:
                 result[key] = [result[key]]
 
             result[key].append(value)
-
         else:
             result[key] = value
 
@@ -109,7 +110,6 @@ def element_to_dict(element: ET.Element) -> Any:
 
 def get_text(element: ET.Element | None) -> str | None:
     """Return combined text from an XML element."""
-
     if element is None:
         return None
 
@@ -127,9 +127,7 @@ def find_direct_child(
     child_name: str,
 ) -> ET.Element | None:
     """Find a direct child using its namespace-independent name."""
-
     for child in element:
-
         if local_name(child.tag).lower() == child_name.lower():
             return child
 
@@ -141,7 +139,6 @@ def find_direct_child_text(
     child_name: str,
 ) -> str | None:
     """Return text from a direct child."""
-
     return get_text(
         find_direct_child(element, child_name)
     )
@@ -152,7 +149,6 @@ def find_all_elements(
     element_name: str,
 ) -> list[ET.Element]:
     """Find all elements matching a local XML name."""
-
     return [
         element
         for element in root.iter()
@@ -165,9 +161,7 @@ def find_first_text(
     element_name: str,
 ) -> str | None:
     """Return the first non-empty matching element text."""
-
     for element in find_all_elements(root, element_name):
-
         value = get_text(element)
 
         if value:
@@ -181,19 +175,13 @@ def find_first_text(
 # --------------------------------------------------
 
 def get_sol_number(folder_name: str) -> int | None:
-    """Extract Sol number from SOL100, SOL_100, or SOL-100."""
-
-    match = SOL_PATTERN.fullmatch(folder_name)
-
-    return int(match.group(1)) if match else None
+    """Extract Sol number using the shared file-discovery rule."""
+    return _shared_get_sol_number(folder_name)
 
 
 def get_product_code(filename: str) -> str | None:
-    """Extract product code following CAL_."""
-
-    match = PRODUCT_PATTERN.search(filename)
-
-    return match.group(1).upper() if match else None
+    """Extract product code using the shared file-discovery rule."""
+    return _shared_get_product_code(filename)
 
 
 def find_sol_folder(path: Path) -> Path | None:
@@ -202,53 +190,64 @@ def find_sol_folder(path: Path) -> Path | None:
 
     Supports XML files located in nested subdirectories.
     """
+    path = Path(path)
 
     for parent in path.parents:
-
-        if SOL_PATTERN.fullmatch(parent.name):
+        if get_sol_number(parent.name) is not None:
             return parent
 
     return None
 
 
-def find_matching_csv(xml_path: Path) -> str | None:
+def _find_matching_csv_details(
+    xml_path: Path,
+) -> tuple[str | None, str | None]:
     """
-    Find a CSV counterpart in the same directory.
+    Find a unique CSV counterpart with one directory scan.
 
     Matching uses a case-insensitive filename stem.
-    Ambiguous matches return None.
+    Ambiguous matches return (None, None).
     """
+    xml_path = Path(xml_path)
 
     if not xml_path.parent.is_dir():
-        return None
+        return None, None
 
     try:
-        matches = [
-            path
-            for path in xml_path.parent.iterdir()
-            if path.is_file()
-            and path.stem.casefold() == xml_path.stem.casefold()
-            and path.suffix.lower() == ".csv"
-        ]
-
+        matches = sorted(
+            (
+                path
+                for path in xml_path.parent.iterdir()
+                if path.is_file()
+                and path.stem.casefold() == xml_path.stem.casefold()
+                and path.suffix.lower() == ".csv"
+            ),
+            key=lambda path: (path.name.casefold(), path.name),
+        )
     except OSError:
-        return None
+        return None, None
 
-    if len(matches) == 1:
-        return matches[0].name
+    if len(matches) != 1:
+        return None, None
 
-    return None
+    matching_path = matches[0]
+
+    return (
+        matching_path.name,
+        str(matching_path),
+    )
+
+
+def find_matching_csv(xml_path: Path) -> str | None:
+    """Return the filename of a unique CSV counterpart."""
+    matching_name, _ = _find_matching_csv_details(xml_path)
+    return matching_name
 
 
 def find_matching_csv_path(xml_path: Path) -> str | None:
     """Return the full path of a unique CSV counterpart."""
-
-    matching_name = find_matching_csv(xml_path)
-
-    if matching_name is None:
-        return None
-
-    return str(xml_path.parent / matching_name)
+    _, matching_path = _find_matching_csv_details(xml_path)
+    return matching_path
 
 
 # --------------------------------------------------
@@ -262,11 +261,9 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
     This function extracts documented metadata only.
     It does not interpret quality flags or scientific validity.
     """
-
     fields = []
 
     for element in root.iter():
-
         tag = local_name(element.tag)
 
         if tag.lower() not in FIELD_TAGS:
@@ -279,21 +276,13 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
         ]
 
         def extract_limit(name: str) -> str | None:
-
-            direct_value = find_direct_child_text(
-                element,
-                name,
-            )
+            direct_value = find_direct_child_text(element, name)
 
             if direct_value is not None:
                 return direct_value
 
             for special in special_constants:
-
-                value = find_direct_child_text(
-                    special,
-                    name,
-                )
+                value = find_direct_child_text(special, name)
 
                 if value is not None:
                     return value
@@ -302,60 +291,38 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
 
         field = {
             "xml_element_type": tag,
-
-            "name": find_direct_child_text(
-                element,
-                "name",
-            ),
-
+            "name": find_direct_child_text(element, "name"),
             "field_number": find_direct_child_text(
                 element,
                 "field_number",
             ),
-
             "data_type": find_direct_child_text(
                 element,
                 "data_type",
             ),
-
             "description": find_direct_child_text(
                 element,
                 "description",
             ),
-
-            "unit": find_direct_child_text(
-                element,
-                "unit",
-            ),
-
+            "unit": find_direct_child_text(element, "unit"),
             "field_length": find_direct_child_text(
                 element,
                 "field_length",
             ),
-
             "field_location": find_direct_child_text(
                 element,
                 "field_location",
             ),
-
             "scaling_factor": find_direct_child_text(
                 element,
                 "scaling_factor",
             ),
-
             "value_offset": find_direct_child_text(
                 element,
                 "value_offset",
             ),
-
-            "valid_minimum": extract_limit(
-                "valid_minimum",
-            ),
-
-            "valid_maximum": extract_limit(
-                "valid_maximum",
-            ),
-
+            "valid_minimum": extract_limit("valid_minimum"),
+            "valid_maximum": extract_limit("valid_maximum"),
             "special_constants": [
                 element_to_dict(special)
                 for special in special_constants
@@ -385,12 +352,10 @@ def classify_candidate_fields(fields: list[dict]) -> dict:
     These are keyword-based candidates, not scientific
     classifications or interpretations.
     """
-
     time_candidates = []
     quality_candidates = []
 
     for field in fields:
-
         searchable_text = " ".join(
             str(field.get(key, ""))
             for key in (
@@ -415,13 +380,8 @@ def classify_candidate_fields(fields: list[dict]) -> dict:
                 quality_candidates.append(field["name"])
 
     return {
-        "time_field_candidates": sorted(
-            set(time_candidates)
-        ),
-
-        "quality_field_candidates": sorted(
-            set(quality_candidates)
-        ),
+        "time_field_candidates": sorted(set(time_candidates)),
+        "quality_field_candidates": sorted(set(quality_candidates)),
     }
 
 
@@ -431,15 +391,10 @@ def classify_candidate_fields(fields: list[dict]) -> dict:
 
 def extract_product_metadata(root: ET.Element) -> dict:
     """Extract selected product identification metadata."""
-
     metadata = {}
 
     for element_name in INTERESTING_ELEMENTS:
-
-        elements = find_all_elements(
-            root,
-            element_name,
-        )
+        elements = find_all_elements(root, element_name)
 
         values = [
             get_text(element)
@@ -459,7 +414,6 @@ def extract_table_metadata(root: ET.Element) -> dict:
 
     No assumption is made that the CSV contains a header row.
     """
-
     table_tags = {
         "table_character",
         "table_delimited",
@@ -483,13 +437,9 @@ def extract_table_metadata(root: ET.Element) -> dict:
     }
 
     for table in table_elements:
-
         table_info = {
             "element_type": local_name(table.tag),
-            "records": find_direct_child_text(
-                table,
-                "records",
-            ),
+            "records": find_direct_child_text(table, "records"),
             "record_length": find_direct_child_text(
                 table,
                 "record_length",
@@ -517,7 +467,6 @@ def extract_table_metadata(root: ET.Element) -> dict:
             "field_delimiter",
             "record_delimiter",
         ):
-
             source_key = (
                 "records"
                 if key == "record_count"
@@ -545,7 +494,6 @@ def parse_xml_file(
     Structural metadata warnings are reported separately.
     Original XML metadata is never automatically modified.
     """
-
     xml_path = Path(xml_path)
 
     sol_folder_path = find_sol_folder(xml_path)
@@ -567,14 +515,17 @@ def parse_xml_file(
     source_relative_path = None
 
     if input_root is not None:
-
         try:
             source_relative_path = xml_path.resolve().relative_to(
                 Path(input_root).resolve()
             ).as_posix()
-
         except ValueError:
             source_relative_path = None
+
+    # Resolve both CSV fields from one directory scan.
+    matching_csv, matching_csv_path = _find_matching_csv_details(
+        xml_path
+    )
 
     record = {
         "source_file": xml_path.name,
@@ -584,8 +535,8 @@ def parse_xml_file(
         "sol_number": sol_number,
         "product_code": product_code,
 
-        "matching_csv": find_matching_csv(xml_path),
-        "matching_csv_path": find_matching_csv_path(xml_path),
+        "matching_csv": matching_csv,
+        "matching_csv_path": matching_csv_path,
 
         "parse_status": "success",
         "parse_error": None,
@@ -613,36 +564,26 @@ def parse_xml_file(
     }
 
     try:
-
         tree = ET.parse(xml_path)
         root = tree.getroot()
 
         fields = extract_field_metadata(root)
 
-        record["product_metadata"] = extract_product_metadata(
-            root
-        )
-
-        record["table_metadata"] = extract_table_metadata(
-            root
-        )
+        record["product_metadata"] = extract_product_metadata(root)
+        record["table_metadata"] = extract_table_metadata(root)
 
         record["field_count"] = len(fields)
         record["fields"] = fields
 
         # Structural validation only.
         # No scientific interpretation or automatic correction.
-        record["metadata_warnings"] = validate_field_metadata(
-            fields
-        )
+        record["metadata_warnings"] = validate_field_metadata(fields)
 
         record["field_delimiter"] = record[
             "table_metadata"
         ].get("field_delimiter")
 
-        record["candidate_fields"] = classify_candidate_fields(
-            fields
-        )
+        record["candidate_fields"] = classify_candidate_fields(fields)
 
         if include_full_xml:
             record["full_xml"] = {
@@ -650,7 +591,6 @@ def parse_xml_file(
             }
 
     except (ET.ParseError, OSError, ValueError) as error:
-
         record["parse_status"] = "failed"
         record["parse_error"] = str(error)
 
@@ -667,7 +607,6 @@ def build_metadata_warning_summary(records: list[dict]) -> dict:
 
     Warning counts are not scientific quality scores.
     """
-
     severity_counts = Counter()
     code_counts = Counter()
 
@@ -675,23 +614,14 @@ def build_metadata_warning_summary(records: list[dict]) -> dict:
     total_warnings = 0
 
     for record in records:
-
         warnings = record.get("metadata_warnings", [])
 
         if warnings:
             files_with_warnings += 1
 
         for warning in warnings:
-
-            severity = warning.get(
-                "severity",
-                "unknown",
-            )
-
-            code = warning.get(
-                "code",
-                "unknown",
-            )
+            severity = warning.get("severity", "unknown")
+            code = warning.get("code", "unknown")
 
             severity_counts[severity] += 1
             code_counts[code] += 1
@@ -725,54 +655,26 @@ def discover_xml_files(input_dir: Path) -> list[Path]:
     """
     Recursively find XML files inside SOL directories.
 
-    Supports nested SOL directories and nested subdirectories.
+    Discovery and nested-SOL ownership are delegated to the
+    shared file_discovery analyzer.
     """
-
     input_dir = Path(input_dir).expanduser()
 
-    if not input_dir.exists():
-        raise FileNotFoundError(
-            f"Input directory does not exist: {input_dir}"
-        )
-
-    if not input_dir.is_dir():
-        raise NotADirectoryError(
-            f"Input path is not a directory: {input_dir}"
-        )
-
+    inventory_records = discover_files(input_dir)
     root = input_dir.resolve()
 
-    sol_folders = sorted(
-        (
-            path
-            for path in root.rglob("*")
-            if path.is_dir()
-            and SOL_PATTERN.fullmatch(path.name)
-        ),
-        key=lambda path: path.as_posix().casefold(),
-    )
-
-    xml_files = []
-
-    for sol_folder in sol_folders:
-
-        for xml_path in sol_folder.rglob("*"):
-
-            if not xml_path.is_file():
-                continue
-
-            if xml_path.suffix.lower() != ".xml":
-                continue
-
-            # A nested SOL folder belongs to itself, not its parent.
-            if find_sol_folder(xml_path) != sol_folder:
-                continue
-
-            xml_files.append(xml_path)
+    xml_files = [
+        root / Path(record["relative_path"])
+        for record in inventory_records
+        if record.get("extension", "").lower() == ".xml"
+    ]
 
     return sorted(
         xml_files,
-        key=lambda path: path.as_posix().casefold(),
+        key=lambda path: (
+            path.relative_to(root).as_posix().casefold(),
+            path.relative_to(root).as_posix(),
+        ),
     )
 
 
@@ -781,7 +683,6 @@ def build_metadata_inventory(
     include_full_xml: bool = False,
 ) -> dict:
     """Build a metadata inventory from discovered XML files."""
-
     input_dir = Path(input_dir).expanduser()
 
     xml_files = discover_xml_files(input_dir)
@@ -789,7 +690,6 @@ def build_metadata_inventory(
     records = []
 
     for index, xml_path in enumerate(xml_files, start=1):
-
         print(
             f"[{index}/{len(xml_files)}] Parsing: "
             f"{xml_path.name}"
@@ -845,7 +745,6 @@ def save_json(
     output_file: Path,
 ) -> None:
     """Save metadata inventory as UTF-8 JSON."""
-
     output_file = Path(output_file).expanduser()
 
     output_file.parent.mkdir(
@@ -857,7 +756,6 @@ def save_json(
         "w",
         encoding="utf-8",
     ) as file:
-
         json.dump(
             data,
             file,
@@ -871,7 +769,6 @@ def save_json(
 # --------------------------------------------------
 
 def main() -> None:
-
     parser = argparse.ArgumentParser(
         description="Parse MEDA PDS4 XML metadata files."
     )
