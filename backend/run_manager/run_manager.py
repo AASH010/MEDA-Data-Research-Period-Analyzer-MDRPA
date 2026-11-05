@@ -26,9 +26,10 @@ __all__ = ["RunManager"]
 
 
 class RunManager:
-    """Coordinate creation and lifecycle management of analysis runs."""
+    """Coordinate creation, recovery, and lifecycle management of runs."""
 
     METADATA_FILENAME = "metadata.json"
+    INTERRUPTED_FAILURE_REASON = "interrupted_by_restart"
 
     RANGE_RUN_ID_PATTERN = re.compile(
         r"^run_range\((\d+)-(\d+)\)_(\d+)$"
@@ -45,6 +46,8 @@ class RunManager:
 
         self.runs_root = Path(runs_root).expanduser().resolve()
         self.registry = registry if registry is not None else RunRegistry()
+
+        self.recover_runs()
 
     @staticmethod
     def _utc_now() -> datetime:
@@ -102,6 +105,77 @@ class RunManager:
     def _metadata_path(self, paths: RunPaths) -> Path:
         return paths.root_dir / self._metadata_filename
 
+    def recover_runs(self) -> tuple[RunRecord, ...]:
+        """Restore persisted runs into the in-memory registry.
+
+        Runs without metadata.json are skipped because they may be
+        incomplete directories.
+
+        PENDING and terminal statuses are restored unchanged.
+
+        A persisted RUNNING status is treated as an interrupted run:
+        it is changed to FAILED, assigned the operational failure reason
+        'interrupted_by_restart', and given a finished timestamp.
+
+        This is an operational recovery classification. It does not
+        indicate scientific invalidity or MEDA data-quality failure.
+        """
+        if not self.runs_root.exists():
+            return ()
+
+        if not self.runs_root.is_dir():
+            raise NotADirectoryError(
+                f"Runs root is not a directory: {self.runs_root}"
+            )
+
+        recovered: list[RunRecord] = []
+
+        for entry in sorted(self.runs_root.iterdir()):
+            if not entry.is_dir():
+                continue
+
+            metadata_path = entry / self._metadata_filename
+
+            if not metadata_path.is_file():
+                continue
+
+            metadata = load_run_metadata(metadata_path)
+
+            if metadata.run_id != entry.name:
+                raise ValueError(
+                    "Run directory name does not match metadata run_id: "
+                    f"{entry.name!r} != {metadata.run_id!r}."
+                )
+
+            if metadata.run_id in self.registry:
+                continue
+
+            paths = RunPaths.create(
+                run_id=metadata.run_id,
+                runs_root=self.runs_root,
+                create=False,
+            )
+
+            if metadata.status == RunStatus.RUNNING.value:
+                metadata.status = RunStatus.FAILED.value
+                metadata.failure_reason = (
+                    self.INTERRUPTED_FAILURE_REASON
+                )
+
+                if metadata.finished_at is None:
+                    metadata.finished_at = self._utc_now()
+
+                save_run_metadata(metadata, metadata_path)
+
+            record = self.registry.register(
+                paths=paths,
+                metadata=metadata,
+            )
+
+            recovered.append(record)
+
+        return tuple(recovered)
+
     def _next_range_sequence(
         self,
         start_sol: int,
@@ -148,8 +222,8 @@ class RunManager:
     ) -> RunPaths:
         """Create a uniquely numbered run directory for a SOL range.
 
-        Directory creation is atomic. If another process creates the
-        same candidate first, the next sequence number is attempted.
+        If another process creates the same candidate first, the next
+        sequence number is attempted.
         """
         sequence = self._next_range_sequence(
             start_sol,
@@ -187,14 +261,10 @@ class RunManager:
 
         When run_id is omitted, start_sol and end_sol are required.
         A sequential identifier is generated independently for each
-        exact SOL range, for example:
+        exact SOL range.
 
-            run_range(107-250)_001
-            run_range(107-250)_002
-            run_range(150-300)_001
-
-        A run starts in PENDING status. Existing run directories are
-        never reused or overwritten.
+        A new run starts in PENDING status. Existing run directories
+        are never reused or overwritten.
         """
         self._validate_sol_range(start_sol, end_sol)
 
@@ -256,7 +326,7 @@ class RunManager:
         return self.registry.get(run_id)
 
     def list_runs(self) -> tuple[RunRecord, ...]:
-        """Return all registered runs in deterministic order."""
+        """Return all registered runs in deterministic ID order."""
         return self.registry.list_runs()
 
     def update_status(
@@ -272,11 +342,14 @@ class RunManager:
             target_status,
         )
 
-        now = self._utc_now()
         metadata = record.metadata
 
         previous_started_at = metadata.started_at
         previous_finished_at = metadata.finished_at
+        previous_status = metadata.status
+        previous_failure_reason = metadata.failure_reason
+
+        now = self._utc_now()
 
         if new_status is RunStatus.RUNNING:
             metadata.started_at = now
@@ -288,6 +361,11 @@ class RunManager:
         }:
             metadata.finished_at = now
 
+        metadata.status = new_status.value
+
+        if new_status is not RunStatus.FAILED:
+            metadata.failure_reason = None
+
         try:
             save_run_metadata(
                 metadata,
@@ -296,6 +374,8 @@ class RunManager:
         except (OSError, TypeError, ValueError):
             metadata.started_at = previous_started_at
             metadata.finished_at = previous_finished_at
+            metadata.status = previous_status
+            metadata.failure_reason = previous_failure_reason
             raise
 
         return self.registry.update_status(

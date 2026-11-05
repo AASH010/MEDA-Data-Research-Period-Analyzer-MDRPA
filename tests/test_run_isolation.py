@@ -1,4 +1,4 @@
-"""Isolation and integration tests for RunManager."""
+"""Isolation, lifecycle, and recovery tests for RunManager."""
 
 import json
 
@@ -357,6 +357,215 @@ def test_fail_running_run(manager):
     assert failed.status is RunStatus.FAILED
     assert failed.metadata.started_at is not None
     assert failed.metadata.finished_at is not None
+
+
+# ---------------------------------------------------------------------
+# Recovery tests
+# ---------------------------------------------------------------------
+
+def test_recovery_restores_pending_run_without_changing_status(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+    first_manager.create_run("pending-run")
+
+    recovered_manager = RunManager(runs_root=runs_root)
+
+    recovered = recovered_manager.get_run("pending-run")
+
+    assert recovered.status is RunStatus.PENDING
+    assert recovered.metadata.status == RunStatus.PENDING.value
+    assert recovered.metadata.failure_reason is None
+
+
+@pytest.mark.parametrize(
+    ("finalize_method", "expected_status"),
+    [
+        ("complete_run", RunStatus.COMPLETED),
+        ("fail_run", RunStatus.FAILED),
+        ("cancel_run", RunStatus.CANCELLED),
+    ],
+)
+def test_recovery_preserves_terminal_statuses(
+    tmp_path,
+    finalize_method,
+    expected_status,
+):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+    first_manager.create_run("terminal-run")
+
+    if finalize_method == "cancel_run":
+        getattr(first_manager, finalize_method)("terminal-run")
+    else:
+        first_manager.start_run("terminal-run")
+        getattr(first_manager, finalize_method)("terminal-run")
+
+    recovered_manager = RunManager(runs_root=runs_root)
+
+    recovered = recovered_manager.get_run("terminal-run")
+
+    assert recovered.status is expected_status
+    assert recovered.metadata.status == expected_status.value
+
+    if expected_status is RunStatus.FAILED:
+        assert recovered.metadata.failure_reason is None
+
+
+def test_recovery_marks_interrupted_running_run_as_failed(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+    first_manager.create_run("interrupted-run")
+    first_manager.start_run("interrupted-run")
+
+    recovered_manager = RunManager(runs_root=runs_root)
+
+    recovered = recovered_manager.get_run("interrupted-run")
+
+    assert recovered.status is RunStatus.FAILED
+    assert recovered.metadata.status == RunStatus.FAILED.value
+    assert (
+        recovered.metadata.failure_reason
+        == "interrupted_by_restart"
+    )
+    assert recovered.metadata.started_at is not None
+    assert recovered.metadata.finished_at is not None
+
+    persisted = json.loads(
+        (
+            runs_root
+            / "interrupted-run"
+            / "metadata.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert persisted["status"] == RunStatus.FAILED.value
+    assert persisted["failure_reason"] == "interrupted_by_restart"
+    assert persisted["finished_at"] is not None
+
+
+def test_recovery_does_not_change_existing_finished_timestamp(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+    first_manager.create_run("interrupted-run")
+    first_manager.start_run("interrupted-run")
+
+    metadata_file = (
+        runs_root
+        / "interrupted-run"
+        / "metadata.json"
+    )
+
+    data = json.loads(metadata_file.read_text(encoding="utf-8"))
+    existing_finished_at = "2026-01-01T12:00:00+00:00"
+    data["finished_at"] = existing_finished_at
+
+    metadata_file.write_text(
+        json.dumps(data),
+        encoding="utf-8",
+    )
+
+    recovered_manager = RunManager(runs_root=runs_root)
+
+    recovered = recovered_manager.get_run("interrupted-run")
+
+    assert recovered.status is RunStatus.FAILED
+    assert recovered.metadata.finished_at.isoformat() == existing_finished_at
+
+
+def test_recovery_supports_legacy_metadata_without_status(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+    first_manager.create_run("legacy-run")
+
+    metadata_file = (
+        runs_root
+        / "legacy-run"
+        / "metadata.json"
+    )
+
+    data = json.loads(metadata_file.read_text(encoding="utf-8"))
+    data.pop("status", None)
+    data.pop("failure_reason", None)
+
+    metadata_file.write_text(
+        json.dumps(data),
+        encoding="utf-8",
+    )
+
+    recovered_manager = RunManager(runs_root=runs_root)
+
+    recovered = recovered_manager.get_run("legacy-run")
+
+    assert recovered.status is RunStatus.PENDING
+    assert recovered.metadata.status == RunStatus.PENDING.value
+    assert recovered.metadata.failure_reason is None
+
+
+def test_recovery_skips_run_directory_without_metadata(tmp_path):
+    runs_root = tmp_path / "runs"
+    incomplete_dir = runs_root / "incomplete-run"
+
+    incomplete_dir.mkdir(parents=True)
+
+    recovered_manager = RunManager(runs_root=runs_root)
+
+    assert recovered_manager.list_runs() == ()
+    assert incomplete_dir.is_dir()
+
+
+def test_recovery_rejects_metadata_with_mismatched_run_id(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+    first_manager.create_run("actual-run")
+
+    metadata_file = (
+        runs_root
+        / "actual-run"
+        / "metadata.json"
+    )
+
+    data = json.loads(metadata_file.read_text(encoding="utf-8"))
+    data["run_id"] = "different-run"
+
+    metadata_file.write_text(
+        json.dumps(data),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="does not match metadata run_id",
+    ):
+        RunManager(runs_root=runs_root)
+
+
+def test_recovery_registers_multiple_runs(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+
+    first_manager.create_run("run-a")
+    first_manager.create_run("run-b")
+    first_manager.create_run("run-c")
+
+    recovered_manager = RunManager(runs_root=runs_root)
+
+    assert len(recovered_manager.list_runs()) == 3
+
+    assert tuple(
+        record.run_id
+        for record in recovered_manager.list_runs()
+    ) == (
+        "run-a",
+        "run-b",
+        "run-c",
+    )
 
 
 # ---------------------------------------------------------------------
