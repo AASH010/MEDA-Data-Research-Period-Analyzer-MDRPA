@@ -1,4 +1,3 @@
-
 """Path management for isolated MEDA analysis runs.
 
 Each run receives its own directory containing input, output, and logs
@@ -22,7 +21,11 @@ __all__ = [
 
 PathLike = Union[str, Path]
 
-_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# Parentheses are supported for SOL-range run identifiers, for example:
+# run_range(107-250)_001
+#
+# Path separators and other unsafe characters remain disallowed.
+_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9()._-]*$")
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,8 @@ class RunPaths:
         if not _RUN_ID_PATTERN.fullmatch(run_id):
             raise ValueError(
                 "run_id must start with a letter or number and contain "
-                "only letters, numbers, dots, underscores, or hyphens."
+                "only letters, numbers, parentheses, dots, underscores, "
+                "or hyphens."
             )
 
         root_dir = Path(runs_root).expanduser().resolve() / run_id
