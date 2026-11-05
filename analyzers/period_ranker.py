@@ -1,4 +1,3 @@
-
 """
 MEDA Period Ranker
 
@@ -51,8 +50,7 @@ DEFAULT_WINDOW_SIZE = 10
 # These weights are configurable and are not scientifically validated.
 DEFAULT_WEIGHTS = {
     "file_availability": 0.20,
-    "timestamp_coverage": 0.25,
-    "data_completeness": 0.20,
+    "data_integrity": 0.45,
     "quality_indicators": 0.15,
     "synchronization": 0.20,
 }
@@ -144,6 +142,35 @@ def normalize_weights(weights: dict) -> dict:
         key: value / total
         for key, value in positive.items()
     }
+
+
+INTEGRITY_PARTS = (
+    ("timestamps", "ts_good", "ts_total"),
+    ("values", "val_good", "val_total"),
+    ("continuity", "cont_good", "cont_total"),
+)
+
+
+def integrity_from_totals(totals: dict, integrity_weights: dict):
+    """Weighted mean of the integrity components that have data.
+
+    Returns (score or None, {component: score}).
+    """
+    components = {}
+    accumulated = 0.0
+    weight_sum = 0.0
+
+    for name, good_key, total_key in INTEGRITY_PARTS:
+        total = totals.get(total_key, 0)
+
+        if total > 0:
+            value = totals.get(good_key, 0) / total * 100
+            components[name] = value
+            accumulated += value * integrity_weights[name]
+            weight_sum += integrity_weights[name]
+
+    score = accumulated / weight_sum if weight_sum > 0 else None
+    return score, components
 
 
 def load_json(path: Path) -> dict:
@@ -251,7 +278,9 @@ def analyse_inventory(
 
         item["inventory_entries"] += 1
         item["sols_with_files"].add(sol)
-        item["products"].add(product)
+
+        if extension == "csv":
+            item["products"].add(product)
 
         if extension == "csv":
             item["csv_sols"].add(sol)
@@ -274,14 +303,19 @@ def analyse_inventory(
 # ---------------------------------------------------------
 
 def analyse_coverage(rows: list[dict]) -> dict:
+    """Read the Coverage Analyzer report (row_count, *_timestamp_count, numeric_*)."""
 
     result = defaultdict(lambda: {
         "files": 0,
         "rows": 0,
         "parsed_timestamps": 0,
         "missing_timestamps": 0,
-        "timestamp_rates": [],
-        "timestamp_intervals": [],
+        "invalid_timestamps": 0,
+        "numeric_values": 0,
+        "numeric_missing": 0,
+        "numeric_invalid": 0,
+        "span_seconds": 0.0,
+        "gap_seconds": 0.0,
     })
 
     for row in rows:
@@ -292,26 +326,20 @@ def analyse_coverage(rows: list[dict]) -> dict:
             continue
 
         item = result[sol]
-
         item["files"] += 1
+        item["span_seconds"] += safe_float(row.get("span_seconds")) or 0.0
+        item["gap_seconds"] += safe_float(row.get("gap_total_seconds")) or 0.0
 
-        total_rows = safe_int(row.get("total_rows"))
-        parsed = safe_int(row.get("parsed_timestamps"))
-        missing = safe_int(row.get("missing_timestamps"))
-
-        if total_rows is not None:
-            item["rows"] += total_rows
-
-        if parsed is not None:
-            item["parsed_timestamps"] += parsed
-
-        if missing is not None:
-            item["missing_timestamps"] += missing
-
-        rate = safe_float(row.get("timestamp_parse_rate_percent"))
-
-        if rate is not None:
-            item["timestamp_rates"].append(rate)
+        for target, column in (
+            ("rows", "row_count"),
+            ("parsed_timestamps", "parsed_timestamp_count"),
+            ("missing_timestamps", "missing_timestamp_count"),
+            ("invalid_timestamps", "invalid_timestamp_count"),
+            ("numeric_values", "numeric_value_count"),
+            ("numeric_missing", "numeric_missing_count"),
+            ("numeric_invalid", "numeric_invalid_count"),
+        ):
+            item[target] += safe_int(row.get(column)) or 0
 
     return result
 
@@ -330,6 +358,7 @@ def analyse_quality(rows: list[dict]) -> dict:
         "below_minimum": 0,
         "above_maximum": 0,
         "range_checked_fields": 0,
+        "range_checked_values": 0,
     })
 
     for row in rows:
@@ -365,6 +394,9 @@ def analyse_quality(rows: list[dict]) -> dict:
 
         if minimum is not None or maximum is not None:
             item["range_checked_fields"] += 1
+            item["range_checked_values"] += (
+                safe_int(row.get("numeric_count")) or 0
+            )
 
     return result
 
@@ -435,18 +467,10 @@ def analyse_sync_pairs(rows: list[dict]) -> dict:
         if overlap is not None:
             item["overlap_durations"].append(overlap)
 
-        first_rate = safe_float(
-            row.get("match_rate_first_percent")
-        )
+        rate = safe_float(row.get("match_rate_sparser_percent"))
 
-        second_rate = safe_float(
-            row.get("match_rate_second_percent")
-        )
-
-        if first_rate is not None and second_rate is not None:
-            item["match_rates"].append(
-                (first_rate + second_rate) / 2
-            )
+        if rate is not None:
+            item["match_rates"].append(rate)
 
         item["matched_timestamps"] += (
             safe_int(row.get("matched_timestamps")) or 0
@@ -467,6 +491,7 @@ def calculate_sol_metrics(
     sync_files: dict,
     sync_pairs: dict,
     expected_products: list[str],
+    integrity_weights: dict,
 ) -> dict:
 
     inventory_data = inventory.get(sol, {})
@@ -492,39 +517,57 @@ def calculate_sol_metrics(
 
         file_score = None
 
-    # Timestamp parsing:
-    # This measures successfully parsed timestamp values,
-    # not physical sensor uptime.
-    parsed = coverage_data.get("parsed_timestamps", 0)
-    missing = coverage_data.get("missing_timestamps", 0)
+    # Timestamp parsing (pooled counts, not an average of averages).
+    ts_good = coverage_data.get("parsed_timestamps", 0)
+    ts_total = (
+        ts_good
+        + coverage_data.get("missing_timestamps", 0)
+        + coverage_data.get("invalid_timestamps", 0)
+    )
 
-    timestamp_total = parsed + missing
+    timestamp_score = ts_good / ts_total * 100 if ts_total else None
 
-    if timestamp_total > 0:
-        timestamp_score = parsed / timestamp_total * 100
+    # Completeness over ALL numeric columns declared in the XML.
+    val_good = coverage_data.get("numeric_values", 0)
+    val_total = (
+        val_good
+        + coverage_data.get("numeric_missing", 0)
+        + coverage_data.get("numeric_invalid", 0)
+    )
+
+    completeness_score = (
+        val_good / val_total * 100 if val_total else None
+    )
+
+    # Continuity: share of the recorded time span not lost to gaps.
+    span = coverage_data.get("span_seconds", 0.0)
+    gap = min(coverage_data.get("gap_seconds", 0.0), span)
+
+    integrity_totals = {
+        "ts_good": ts_good,
+        "ts_total": ts_total,
+        "val_good": val_good,
+        "val_total": val_total,
+        "cont_good": span - gap,
+        "cont_total": span,
+    }
+
+    integrity_score, _ = integrity_from_totals(
+        integrity_totals, integrity_weights
+    )
+
+    # Quality indicator: share of range-checked numeric values inside
+    # XML-declared bounds. None when the XML declares no bounds.
+    checked = quality_data.get("range_checked_values", 0)
+
+    if checked > 0:
+        outside = (
+            quality_data.get("below_minimum", 0)
+            + quality_data.get("above_maximum", 0)
+        )
+        quality_score = (1 - outside / checked) * 100
     else:
-        timestamp_score = None
-
-    # Data completeness:
-    quality_total = quality_data.get("total_values", 0)
-    quality_missing = quality_data.get("missing_values", 0)
-
-    if quality_total > 0:
-        completeness_score = (
-            1 - quality_missing / quality_total
-        ) * 100
-    else:
-        completeness_score = None
-
-    # Quality indicator:
-    # No undocumented flag values are interpreted.
-    # This score only reflects the proportion of range-checked
-    # numeric values that fall inside declared XML bounds.
-    #
-    # The quality analyzer currently does not report total
-    # numeric values checked separately, so this score is
-    # unavailable until that information is added.
-    quality_score = None
+        quality_score = None
 
     # Synchronization:
     rates = sync_pair_data.get("match_rates", [])
@@ -547,7 +590,15 @@ def calculate_sol_metrics(
             round(clamp(completeness_score), 3)
             if completeness_score is not None else None
         ),
-        "quality_indicator_score": quality_score,
+        "quality_indicator_score": (
+            round(clamp(quality_score), 3)
+            if quality_score is not None else None
+        ),
+        "data_integrity_score": (
+            round(integrity_score, 3)
+            if integrity_score is not None else None
+        ),
+        **integrity_totals,
         "synchronization_score": (
             round(clamp(synchronization_score), 3)
             if synchronization_score is not None else None
@@ -562,12 +613,12 @@ def calculate_sol_metrics(
         "xml_sols_present": len(
             inventory_data.get("xml_sols", set())
         ),
-        "parsed_timestamps": parsed,
-        "missing_timestamps": missing,
+        "parsed_timestamps": ts_good,
+        "missing_timestamps": ts_total - ts_good,
         "quality_fields_analysed": (
             quality_data.get("analysed_fields", 0)
         ),
-        "quality_missing_values": quality_missing,
+        "quality_missing_values": val_total - val_good,
         "range_checked_fields": (
             quality_data.get("range_checked_fields", 0)
         ),
@@ -588,107 +639,128 @@ def aggregate_window(
     window: tuple[int, int],
     sol_metrics: dict,
     weights: dict,
+    window_size: int,
+    min_sol_fraction: float = 0.5,
+    min_metrics: int = 3,
+    integrity_weights: dict | None = None,
 ) -> dict:
+
+    integrity_weights = integrity_weights or {
+        "timestamps": 1.0, "values": 1.0, "continuity": 1.0,
+    }
+    integrity_components: dict = {}
 
     start, end = window
     sols = list(range(start, end + 1))
+    total_sols = len(sols)
 
-    metric_keys = {
-        "file_availability": "file_availability_score",
-        "timestamp_coverage": "timestamp_coverage_score",
-        "data_completeness": "data_completeness_score",
-        "quality_indicators": "quality_indicator_score",
-        "synchronization": "synchronization_score",
-    }
+    # (metric name, per-Sol score field, pooled (good, total) fields or None)
+    metric_defs = [
+        ("file_availability", "file_availability_score", None),
+        ("data_integrity", "data_integrity_score", "integrity"),
+        ("quality_indicators", "quality_indicator_score", None),
+        ("synchronization", "synchronization_score", None),
+    ]
 
     metric_averages = {}
+    contributing = {}
     reasons = []
     available_weight = 0.0
     weighted_total = 0.0
 
-    for metric_name, field_name in metric_keys.items():
+    for metric_name, field_name, pooled in metric_defs:
 
-        values = [
-            sol_metrics[sol][field_name]
-            for sol in sols
+        present = [
+            sol for sol in sols
             if sol in sol_metrics
             and sol_metrics[sol][field_name] is not None
         ]
 
-        metric_value = average(values)
+        contributing[metric_name] = len(present)
+
+        # Too few Sols carry this metric: treat it as unavailable
+        # instead of letting a single good Sol represent the window.
+        if len(present) < min_sol_fraction * total_sols or not present:
+            metric_averages[metric_name] = None
+            continue
+
+        if pooled == "integrity":
+            # Pool raw counts/seconds across Sols, then combine components.
+            totals = {
+                key: sum(sol_metrics[s][key] for s in present)
+                for _, good_key, total_key in INTEGRITY_PARTS
+                for key in (good_key, total_key)
+            }
+            metric_value, integrity_components = integrity_from_totals(
+                totals, integrity_weights
+            )
+        else:
+            metric_value = average([
+                sol_metrics[s][field_name] for s in present
+            ])
+
         metric_averages[metric_name] = metric_value
 
         if metric_value is None:
             continue
 
         weight = weights[metric_name]
-
         weighted_total += metric_value * weight
         available_weight += weight
 
-    if available_weight > 0:
-        score = weighted_total / available_weight
-    else:
-        score = None
+    score = weighted_total / available_weight if available_weight > 0 else None
 
     for metric_name, value in metric_averages.items():
 
+        n = contributing[metric_name]
+
         if value is None:
             reasons.append(
-                f"{metric_name}: insufficient report data."
+                f"{metric_name}: unavailable ({n}/{total_sols} Sols had data)."
             )
-
         elif value >= 90:
-            reasons.append(
-                f"{metric_name}: strong observed indicator."
-            )
-
+            reasons.append(f"{metric_name}: strong observed indicator ({n}/{total_sols} Sols).")
         elif value >= 70:
-            reasons.append(
-                f"{metric_name}: moderate observed indicator."
-            )
-
+            reasons.append(f"{metric_name}: moderate observed indicator ({n}/{total_sols} Sols).")
         else:
-            reasons.append(
-                f"{metric_name}: review recommended."
-            )
+            reasons.append(f"{metric_name}: review recommended ({n}/{total_sols} Sols).")
 
-    # A window should not be ranked confidently when too many
-    # metrics are unavailable.
-    available_metrics = sum(
-        value is not None
-        for value in metric_averages.values()
-    )
+    used = [k for k, v in metric_averages.items() if v is not None]
+    is_partial = total_sols < window_size
 
-    ranking_status = (
-        "rankable"
-        if available_metrics >= 2
-        else "insufficient_data"
-    )
-
-    if ranking_status == "insufficient_data":
+    if len(used) < min_metrics:
+        ranking_status = "insufficient_data"
         score = None
         reasons.append(
-            "Too few independent metrics are available for ranking."
+            f"Only {len(used)} metric(s) available; at least {min_metrics} required."
         )
+    elif is_partial:
+        ranking_status = "partial_window"
+        reasons.append(
+            f"Window has {total_sols} Sols (< {window_size}); not ranked against full windows."
+        )
+    else:
+        ranking_status = "rankable"
 
     return {
         "window_start_sol": start,
         "window_end_sol": end,
         "window_label": window_label(window),
         "ranking_status": ranking_status,
-        "exploratory_score": (
-            round(score, 3) if score is not None else None
-        ),
-        "available_metrics": available_metrics,
-        "total_sols": len(sols),
+        "is_partial_window": is_partial,
+        "exploratory_score": round(score, 3) if score is not None else None,
+        "available_metrics": len(used),
+        "metrics_used": ",".join(used),
+        "total_sols": total_sols,
         **{
-            f"{key}_score": (
-                round(value, 3)
-                if value is not None else None
-            )
+            f"integrity_{name}_score": round(value, 3)
+            for name, value in integrity_components.items()
+        },
+        **{
+            f"{key}_score": round(value, 3) if value is not None else None
             for key, value in metric_averages.items()
         },
+        **{f"{key}_sols": n for key, n in contributing.items()},
         "reasons": " | ".join(reasons),
     }
 
@@ -728,14 +800,22 @@ def write_ranking_csv(path: Path, rows: list[dict]):
         "window_end_sol",
         "window_label",
         "ranking_status",
+        "is_partial_window",
         "exploratory_score",
         "available_metrics",
+        "metrics_used",
         "total_sols",
         "file_availability_score",
-        "timestamp_coverage_score",
-        "data_completeness_score",
+        "data_integrity_score",
+        "integrity_timestamps_score",
+        "integrity_values_score",
+        "integrity_continuity_score",
         "quality_indicators_score",
         "synchronization_score",
+        "file_availability_sols",
+        "data_integrity_sols",
+        "quality_indicators_sols",
+        "synchronization_sols",
         "reasons",
     ]
 
@@ -787,7 +867,9 @@ def build_summary(
             "Weights are configurable and not scientifically calibrated.",
             "Unavailable metrics are excluded and remaining weights are renormalized.",
             "Quality flag meanings are not inferred.",
-            "Quality indicator score is currently unavailable.",
+            "Quality indicator score exists only where the XML declares valid_minimum/valid_maximum.",
+            "Partial windows are listed but not ranked.",
+            "data_integrity merges timestamp validity, numeric-value validity and continuity (gap time); it is not a scientific quality score.",
             "Timestamp parsing success is not equivalent to sensor uptime.",
             "Product availability does not establish measurement completeness.",
             "Synchronization match rates depend on sampling schedules and tolerance.",
@@ -823,7 +905,7 @@ def run(args):
     sync_files = analyse_sync_files(sync_file_rows)
     sync_pairs = analyse_sync_pairs(sync_pair_rows)
 
-    expected_products = sorted({
+    expected_products = args.required_products or sorted({
         (row.get("product_code") or "").strip()
         for row in inventory_rows
         if row.get("product_code")
@@ -831,11 +913,16 @@ def run(args):
 
     weights = normalize_weights({
         "file_availability": args.weight_files,
-        "timestamp_coverage": args.weight_timestamps,
-        "data_completeness": args.weight_completeness,
+        "data_integrity": args.weight_integrity,
         "quality_indicators": args.weight_quality,
         "synchronization": args.weight_sync,
     })
+
+    integrity_weights = {
+        "timestamps": args.integrity_timestamps,
+        "values": args.integrity_values,
+        "continuity": args.integrity_continuity,
+    }
 
     print("Calculating Sol metrics...")
 
@@ -851,6 +938,7 @@ def run(args):
             sync_files,
             sync_pairs,
             expected_products,
+            integrity_weights,
         )
 
     print("Building candidate windows...")
@@ -870,6 +958,10 @@ def run(args):
                 window,
                 sol_metrics,
                 weights,
+                args.window_size,
+                args.min_sol_fraction,
+                args.min_metrics,
+                integrity_weights,
             )
         )
 
@@ -942,9 +1034,15 @@ def parse_args():
     parser.add_argument("--end-sol", type=int, default=DEFAULT_END_SOL)
     parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE)
 
+    parser.add_argument("--min-sol-fraction", type=float, default=0.5)
+    parser.add_argument("--min-metrics", type=int, default=3)
+    parser.add_argument("--required-products", nargs="*", default=None)
+
     parser.add_argument("--weight-files", type=float, default=0.20)
-    parser.add_argument("--weight-timestamps", type=float, default=0.25)
-    parser.add_argument("--weight-completeness", type=float, default=0.20)
+    parser.add_argument("--weight-integrity", type=float, default=0.45)
+    parser.add_argument("--integrity-timestamps", type=float, default=1.0)
+    parser.add_argument("--integrity-values", type=float, default=1.0)
+    parser.add_argument("--integrity-continuity", type=float, default=1.0)
     parser.add_argument("--weight-quality", type=float, default=0.15)
     parser.add_argument("--weight-sync", type=float, default=0.20)
 
@@ -958,10 +1056,15 @@ def parse_args():
 
     weights = [
         args.weight_files,
-        args.weight_timestamps,
-        args.weight_completeness,
+        args.weight_integrity,
         args.weight_quality,
         args.weight_sync,
+    ]
+
+    weights += [
+        args.integrity_timestamps,
+        args.integrity_values,
+        args.integrity_continuity,
     ]
 
     if any(weight < 0 for weight in weights):

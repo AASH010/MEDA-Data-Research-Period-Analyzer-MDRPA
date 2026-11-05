@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -17,10 +16,12 @@ PRODUCT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-FIELD_TAG_PATTERN = re.compile(
-    r"^Field_",
-    re.IGNORECASE,
-)
+FIELD_TAGS = {
+    "field_delimited",
+    "field_character",
+    "field_binary",
+    "field_bit",
+}
 
 QUALITY_KEYWORDS = re.compile(
     r"\b(quality|qual|flag|status|validity|confidence)\b",
@@ -185,8 +186,24 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
 
         tag = local_name(element.tag)
 
-        if not FIELD_TAG_PATTERN.match(tag):
+        if tag.lower() not in FIELD_TAGS:
             continue
+
+        # In PDS4 the limits normally live inside Special_Constants.
+        special = [
+            child for child in element
+            if local_name(child.tag).lower() == "special_constants"
+        ]
+
+        def limit(name):
+            direct = find_direct_child_text(element, name)
+            if direct is not None:
+                return direct
+            for sc in special:
+                value = find_direct_child_text(sc, name)
+                if value is not None:
+                    return value
+            return None
 
         field = {
             "xml_element_type": tag,
@@ -215,12 +232,8 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
             "value_offset": find_direct_child_text(
                 element, "value_offset"
             ),
-            "valid_minimum": find_direct_child_text(
-                element, "valid_minimum"
-            ),
-            "valid_maximum": find_direct_child_text(
-                element, "valid_maximum"
-            ),
+            "valid_minimum": limit("valid_minimum"),
+            "valid_maximum": limit("valid_maximum"),
             "special_constants": [],
         }
 
@@ -346,6 +359,13 @@ def parse_xml_file(xml_path: Path) -> dict:
         record["field_count"] = len(fields)
         record["fields"] = fields
 
+        # A Header object in the XML means the CSV has a header row.
+        record["has_header"] = bool(find_all_elements(root, "Header"))
+        record["field_delimiter"] = next(
+            (get_text(e) for e in find_all_elements(root, "field_delimiter")),
+            None,
+        )
+
         record["candidate_fields"] = classify_candidate_fields(
             fields
         )
@@ -362,6 +382,8 @@ def parse_xml_file(xml_path: Path) -> dict:
 
         record["product_metadata"] = {}
         record["field_count"] = 0
+        record["has_header"] = None
+        record["field_delimiter"] = None
         record["fields"] = []
         record["candidate_fields"] = {
             "time_field_candidates": [],

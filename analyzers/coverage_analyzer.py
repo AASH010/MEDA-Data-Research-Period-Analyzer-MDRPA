@@ -1,14 +1,25 @@
-
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import math
 import re
+import statistics
 
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+from meda_common import (
+    DEFAULT_AXIS_PREFERENCE,
+    MISSING_TEXT,
+    PARSERS,
+    norm,
+    numeric_column_indexes,
+    ordered_fields,
+    pick_time_column,
+)
 
 
 SOL_PATTERN = re.compile(
@@ -27,20 +38,15 @@ TIME_KEYWORDS = re.compile(
 )
 
 REPORT_COLUMNS = [
-    "sol_number",
-    "sol_folder",
-    "product_code",
-    "filename",
-    "file_size_bytes",
-    "row_count",
-    "time_field",
-    "first_time",
-    "last_time",
-    "parsed_timestamp_count",
-    "missing_timestamp_count",
-    "duplicate_timestamp_count",
-    "measurement_coverage_status",
-    "notes",
+    "sol_number", "sol_folder", "product_code", "filename",
+    "file_size_bytes", "row_count", "time_field", "time_kind",
+    "first_time", "last_time", "span_seconds",
+    "parsed_timestamp_count", "missing_timestamp_count",
+    "invalid_timestamp_count", "duplicate_timestamp_count",
+    "out_of_order_count", "median_step_seconds", "gap_count",
+    "largest_gap_seconds", "gap_total_seconds", "numeric_value_count",
+    "numeric_missing_count", "numeric_invalid_count",
+    "measurement_coverage_status", "notes",
 ]
 
 
@@ -150,55 +156,6 @@ def load_metadata_inventory(path: Path) -> dict:
 # Metadata Time Field Detection
 # --------------------------------------------------
 
-def build_metadata_index(metadata: dict) -> dict:
-
-    index = {}
-
-    for record in metadata.get("records", []):
-
-        key = (
-            record.get("sol_folder", "").casefold(),
-            record.get("source_file", "").casefold(),
-        )
-
-        candidates = []
-
-        for field in record.get("fields", []):
-
-            name = field.get("name")
-
-            description = field.get("description", "")
-
-            searchable = f"{name or ''} {description}"
-
-            if name and TIME_KEYWORDS.search(searchable):
-                candidates.append(name)
-
-        index[key] = candidates
-
-    return index
-
-
-def find_time_field(
-    headers: list[str],
-    candidates: list[str],
-) -> str | None:
-
-    normalized_headers = {
-        normalize_name(header): header
-        for header in headers
-    }
-
-    for candidate in candidates:
-
-        key = normalize_name(candidate)
-
-        if key in normalized_headers:
-            return normalized_headers[key]
-
-    return None
-
-
 # --------------------------------------------------
 # CSV Analysis
 # --------------------------------------------------
@@ -229,185 +186,183 @@ def resolve_csv_path(
     return matches[0] if len(matches) == 1 else None
 
 
-def detect_header(
-    first_row: list[str],
-    metadata_fields: list[str],
-) -> bool:
+def build_metadata_index(metadata: dict) -> dict:
+    """Map (sol_folder, xml filename) -> XML record (fields, has_header)."""
+    index = {}
 
-    if not first_row or not metadata_fields:
-        return False
+    for record in metadata.get("records", []):
+        key = (
+            record.get("sol_folder", "").casefold(),
+            record.get("source_file", "").casefold(),
+        )
+        index[key] = record
 
-    normalized_row = {
-        normalize_name(value)
-        for value in first_row
-    }
-
-    normalized_fields = {
-        normalize_name(value)
-        for value in metadata_fields
-    }
-
-    return bool(normalized_row.intersection(normalized_fields))
+    return index
 
 
 def analyze_csv(
     csv_path: Path,
-    time_candidates: list[str],
+    xml_record: dict | None,
+    axis_preference=DEFAULT_AXIS_PREFERENCE,
+    gap_factor: float = 2.5,
 ) -> dict:
+    """Single streaming pass: time axis, gaps and numeric completeness."""
 
     result = {
         "row_count": 0,
         "time_field": "",
+        "time_kind": "",
         "first_time": "",
         "last_time": "",
+        "span_seconds": "",
         "parsed_timestamp_count": 0,
         "missing_timestamp_count": 0,
+        "invalid_timestamp_count": 0,
         "duplicate_timestamp_count": 0,
+        "out_of_order_count": 0,
+        "median_step_seconds": "",
+        "gap_count": 0,
+        "largest_gap_seconds": "",
+        "gap_total_seconds": "",
+        "numeric_value_count": 0,
+        "numeric_missing_count": 0,
+        "numeric_invalid_count": 0,
         "measurement_coverage_status": "not_assessed",
         "notes": [],
     }
 
+    if not xml_record or not xml_record.get("fields"):
+        result["measurement_coverage_status"] = "no_xml_fields"
+        result["notes"].append("No XML field definitions for this CSV.")
+        return result
+
+    fields = ordered_fields(xml_record["fields"])
+    names = [f.get("name") or "" for f in fields]
+    has_header = xml_record.get("has_header")
+
+    time_idx, time_name, kind = pick_time_column(fields, axis_preference)
+    skip = {time_idx} if time_idx is not None else set()
+    numeric_idx = numeric_column_indexes(fields, skip)
+
+    parser = PARSERS[kind][0] if kind else None
+    result["time_field"] = time_name or ""
+    result["time_kind"] = kind or ""
+
+    steps = []
+    prev = None
+    first_val = last_val = None
+    first_raw = last_raw = ""
+
     try:
-
-        with csv_path.open(
-            "r",
-            newline="",
-            encoding="utf-8-sig",
-        ) as file:
-
+        with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
             reader = csv.reader(file)
 
-            first_row = next(reader, None)
-
-            if not first_row:
-                result["measurement_coverage_status"] = "empty_file"
-                result["notes"].append("csv_has_no_rows")
-                return result
-
-            # Determine whether the first row is a header.
-            has_header = detect_header(
-                first_row,
-                time_candidates,
-            )
-
             if has_header:
+                header = next(reader, None)
 
-                headers = [
-                    value.strip()
-                    for value in first_row
-                ]
+                if header is None:
+                    result["measurement_coverage_status"] = "empty_file"
+                    return result
 
-                rows = reader
+                if [norm(h) for h in header] != [norm(n) for n in names]:
+                    result["notes"].append(
+                        "CSV header differs from XML field order."
+                    )
 
-            else:
+            for row in reader:
 
-                headers = []
-                rows = iter([first_row] + list(reader))
-
-            time_field = find_time_field(
-                headers,
-                time_candidates,
-            )
-
-            result["time_field"] = time_field or ""
-
-            time_index = (
-                headers.index(time_field)
-                if time_field
-                else None
-            )
-
-            timestamps = set()
-
-            earliest = None
-            latest = None
-
-            for row in rows:
-
-                if not row or not any(value.strip() for value in row):
+                if not row or not any(v.strip() for v in row):
                     continue
 
                 result["row_count"] += 1
 
-                if time_index is None:
+                for i in numeric_idx:
+                    raw = row[i].strip() if i < len(row) else ""
 
+                    if raw.lower() in MISSING_TEXT:
+                        result["numeric_missing_count"] += 1
+                        continue
+
+                    try:
+                        ok = math.isfinite(float(raw))
+                    except ValueError:
+                        ok = False
+
+                    if ok:
+                        result["numeric_value_count"] += 1
+                    else:
+                        result["numeric_invalid_count"] += 1
+
+                if time_idx is None:
                     continue
 
-                if time_index >= len(row):
+                raw = row[time_idx].strip() if time_idx < len(row) else ""
 
+                if raw.lower() in MISSING_TEXT:
                     result["missing_timestamp_count"] += 1
                     continue
 
-                raw_value = row[time_index].strip()
+                value = parser(raw)
 
-                if not raw_value:
-
-                    result["missing_timestamp_count"] += 1
-                    continue
-
-                timestamp = parse_timestamp(raw_value)
-
-                if timestamp is None:
-
+                if value is None:
+                    result["invalid_timestamp_count"] += 1
                     continue
 
                 result["parsed_timestamp_count"] += 1
 
-                if timestamp in timestamps:
+                if prev is not None:
+                    step = value - prev
 
-                    result["duplicate_timestamp_count"] += 1
+                    if step < 0:
+                        result["out_of_order_count"] += 1
+                    elif step == 0:
+                        result["duplicate_timestamp_count"] += 1
+                    else:
+                        steps.append(step)
 
-                timestamps.add(timestamp)
+                prev = value
 
-                if earliest is None or timestamp < earliest:
-                    earliest = timestamp
+                if first_val is None or value < first_val:
+                    first_val, first_raw = value, raw
 
-                if latest is None or timestamp > latest:
-                    latest = timestamp
-
-            result["first_time"] = format_timestamp(earliest)
-            result["last_time"] = format_timestamp(latest)
-
-            if time_index is None:
-
-                result["measurement_coverage_status"] = (
-                    "time_field_not_detected"
-                )
-
-                result["notes"].append(
-                    "No matching time field found in CSV header."
-                )
-
-            elif result["parsed_timestamp_count"] == 0:
-
-                result["measurement_coverage_status"] = (
-                    "timestamps_not_interpreted"
-                )
-
-                result["notes"].append(
-                    "No timestamps could be parsed using supported formats."
-                )
-
-            else:
-
-                result["measurement_coverage_status"] = (
-                    "timestamp_analysis_available"
-                )
-
-                if result["missing_timestamp_count"] > 0:
-                    result["notes"].append(
-                        "Some rows have missing timestamp values."
-                    )
-
-            return result
+                if last_val is None or value > last_val:
+                    last_val, last_raw = value, raw
 
     except (OSError, UnicodeError, csv.Error) as error:
-
         result["measurement_coverage_status"] = "read_failed"
-
         result["notes"].append(str(error))
-
         return result
+
+    if steps:
+        median_step = statistics.median(steps)
+        gaps = [s for s in steps if s > gap_factor * median_step]
+        result["median_step_seconds"] = round(median_step, 6)
+        result["gap_count"] = len(gaps)
+        result["largest_gap_seconds"] = round(max(steps), 6)
+        result["gap_total_seconds"] = round(sum(gaps), 6)
+
+    if first_val is not None:
+        result["first_time"] = first_raw
+        result["last_time"] = last_raw
+        result["span_seconds"] = round(last_val - first_val, 3)
+
+    if time_idx is None:
+        result["measurement_coverage_status"] = "time_field_not_detected"
+        result["notes"].append("No supported time column (SCLK/UTC/LMST/LTST).")
+    elif result["parsed_timestamp_count"] == 0:
+        result["measurement_coverage_status"] = "timestamps_not_interpreted"
+        result["notes"].append("No values parsed for the selected time column.")
+    elif result["row_count"] == 0:
+        result["measurement_coverage_status"] = "no_data_rows"
+    else:
+        result["measurement_coverage_status"] = "timestamp_analysis_available"
+
+    if kind and kind != "utc":
+        result["notes"].append(
+            f"Time axis is {PARSERS[kind][1]}; not converted to UTC."
+        )
+
+    return result
 
 
 # --------------------------------------------------
@@ -446,12 +401,6 @@ def analyze_coverage(
             "filename": filename,
             "file_size_bytes": record.get("file_size_bytes", ""),
             "row_count": 0,
-            "time_field": "",
-            "first_time": "",
-            "last_time": "",
-            "parsed_timestamp_count": 0,
-            "missing_timestamp_count": 0,
-            "duplicate_timestamp_count": 0,
             "measurement_coverage_status": "not_analyzed",
             "notes": "",
         }
@@ -461,10 +410,7 @@ def analyze_coverage(
             filename.rsplit(".", 1)[0].casefold() + ".xml",
         )
 
-        time_candidates = metadata_index.get(
-            metadata_key,
-            [],
-        )
+        xml_record = metadata_index.get(metadata_key)
 
         csv_path = resolve_csv_path(
             input_dir,
@@ -482,10 +428,7 @@ def analyze_coverage(
 
         else:
 
-            analysis = analyze_csv(
-                csv_path,
-                time_candidates,
-            )
+            analysis = analyze_csv(csv_path, xml_record)
 
             for key, value in analysis.items():
 
@@ -563,7 +506,11 @@ def build_product_summary(
 
         sol = report.get("sol_number")
 
-        if product and sol is not None:
+        if (
+            product
+            and sol is not None
+            and int(report.get("row_count") or 0) > 0
+        ):
             products[product].append(report)
 
     summaries = {}
@@ -595,6 +542,10 @@ def build_product_summary(
             "longest_consecutive_file_presence": consecutive,
             "total_rows": sum(
                 int(record.get("row_count") or 0)
+                for record in records
+            ),
+            "total_numeric_values": sum(
+                int(record.get("numeric_value_count") or 0)
                 for record in records
             ),
             "total_parsed_timestamps": sum(

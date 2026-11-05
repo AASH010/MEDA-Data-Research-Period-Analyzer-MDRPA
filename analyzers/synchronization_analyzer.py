@@ -1,4 +1,3 @@
-
 """
 MEDA Synchronization Analyzer
 
@@ -20,12 +19,22 @@ import argparse
 import csv
 import json
 import re
+import statistics
 
+from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
 from typing import Any, Optional
+
+from meda_common import (
+    DEFAULT_AXIS_PREFERENCE,
+    MISSING_TEXT,
+    PARSERS,
+    ordered_fields,
+    pick_time_column,
+)
 
 
 DEFAULT_INPUT = Path("input")
@@ -247,168 +256,132 @@ def discover_time_candidates(
 
 def analyse_timestamp_file(
     csv_path: Path,
-    candidate_names: list[str],
+    xml_record: dict,
     sol_number: str,
     product_code: str,
-) -> dict:
+    axis_preference=DEFAULT_AXIS_PREFERENCE,
+) -> tuple[dict, list[float]]:
+    """Always returns (file_report, sorted_seconds)."""
 
-    base_result = {
+    report = {
         "sol_number": sol_number,
         "product_code": product_code,
         "csv_file": csv_path.name,
         "selected_time_field": "",
+        "time_kind": "",
         "analysis_status": "",
         "total_rows": 0,
         "parsed_timestamps": 0,
         "missing_timestamps": 0,
         "invalid_timestamps": 0,
         "duplicate_timestamps": 0,
+        "median_step_seconds": "",
         "first_timestamp": "",
         "last_timestamp": "",
-        "timezone_type": "",
         "notes": "",
     }
 
+    fields = ordered_fields(xml_record.get("fields") or [])
+    idx, name, kind = pick_time_column(fields, axis_preference)
+
+    if idx is None:
+        report["analysis_status"] = "no_time_field"
+        report["notes"] = "No supported time column (SCLK/UTC/LMST/LTST)."
+        return report, []
+
+    report["selected_time_field"] = name
+    report["time_kind"] = kind
+    parser = PARSERS[kind][0]
+    seconds = []
+
     try:
         with csv_path.open(
-            "r",
-            encoding="utf-8-sig",
-            newline="",
-            errors="replace",
+            "r", encoding="utf-8-sig", newline="", errors="replace"
         ) as handle:
+            reader = csv.reader(handle)
 
-            reader = csv.DictReader(handle)
+            if xml_record.get("has_header"):
+                next(reader, None)
 
-            if not reader.fieldnames:
-                base_result["analysis_status"] = "no_header"
-                base_result["notes"] = "CSV header unavailable."
-                return base_result
+            for row in reader:
+                if not row or not any(v.strip() for v in row):
+                    continue
 
-            # Match metadata candidates against actual CSV columns.
-            column_lookup = {
-                normalise_name(column): column
-                for column in reader.fieldnames
-                if column
-            }
+                report["total_rows"] += 1
+                raw = row[idx].strip() if idx < len(row) else ""
 
-            matched_columns = []
+                if raw.lower() in MISSING_TEXT:
+                    report["missing_timestamps"] += 1
+                    continue
 
-            for candidate in candidate_names:
-                actual = column_lookup.get(
-                    normalise_name(candidate)
-                )
+                value = parser(raw)
 
-                if actual and actual not in matched_columns:
-                    matched_columns.append(actual)
-
-            if not matched_columns:
-                base_result["analysis_status"] = "no_time_field"
-                base_result["notes"] = (
-                    "No metadata time candidate matched a CSV column."
-                )
-                return base_result
-
-            # Select the candidate with the greatest number
-            # of successfully parsed timestamps.
-            best_column = None
-            best_timestamps = []
-            best_missing = 0
-            best_invalid = 0
-
-            for column in matched_columns:
-
-                timestamps = []
-                missing = 0
-                invalid = 0
-
-                handle.seek(0)
-                test_reader = csv.DictReader(handle)
-
-                for row in test_reader:
-                    value = row.get(column)
-
-                    if value is None or not str(value).strip():
-                        missing += 1
-                        continue
-
-                    parsed = parse_iso_timestamp(value)
-
-                    if parsed is None:
-                        invalid += 1
-                    else:
-                        timestamps.append(parsed)
-
-                if len(timestamps) > len(best_timestamps):
-                    best_column = column
-                    best_timestamps = timestamps
-                    best_missing = missing
-                    best_invalid = invalid
-
-            if best_column is None or not best_timestamps:
-                base_result["analysis_status"] = "no_parseable_timestamps"
-                base_result["notes"] = (
-                    "No candidate column contained parseable ISO timestamps."
-                )
-                return base_result
-
-            # Read total rows for the selected field.
-            handle.seek(0)
-            final_reader = csv.DictReader(handle)
-
-            total_rows = sum(1 for _ in final_reader)
-
-            duplicate_count = (
-                len(best_timestamps) - len(set(best_timestamps))
-            )
-
-            best_timestamps.sort()
-
-            timezone_types = {
-                "aware" if item.tzinfo is not None else "naive"
-                for item in best_timestamps
-            }
-
-            timezone_type = (
-                next(iter(timezone_types))
-                if len(timezone_types) == 1
-                else "mixed"
-            )
-
-            base_result.update({
-                "selected_time_field": best_column,
-                "analysis_status": "analysed",
-                "total_rows": total_rows,
-                "parsed_timestamps": len(best_timestamps),
-                "missing_timestamps": best_missing,
-                "invalid_timestamps": best_invalid,
-                "duplicate_timestamps": duplicate_count,
-                "first_timestamp": best_timestamps[0].isoformat(),
-                "last_timestamp": best_timestamps[-1].isoformat(),
-                "timezone_type": timezone_type,
-                "notes": "",
-            })
-
-            return base_result, best_timestamps
+                if value is None:
+                    report["invalid_timestamps"] += 1
+                else:
+                    seconds.append(value)
 
     except Exception as exc:
-        base_result["analysis_status"] = "read_error"
-        base_result["notes"] = str(exc)
-        return base_result
+        report["analysis_status"] = "read_error"
+        report["notes"] = str(exc)
+        return report, []
+
+    if not seconds:
+        report["analysis_status"] = "no_parseable_timestamps"
+        return report, []
+
+    seconds.sort()
+    steps = [b - a for a, b in zip(seconds, seconds[1:]) if b > a]
+
+    report.update({
+        "analysis_status": "analysed",
+        "parsed_timestamps": len(seconds),
+        "duplicate_timestamps": len(seconds) - len(set(seconds)),
+        "median_step_seconds": (
+            round(statistics.median(steps), 6) if steps else ""
+        ),
+        "first_timestamp": seconds[0],
+        "last_timestamp": seconds[-1],
+    })
+
+    return report, seconds
 
 
-# ---------------------------------------------------------
-# Pairwise synchronization
-# ---------------------------------------------------------
+def count_within_tolerance(
+    source: list[float],
+    reference: list[float],
+    tolerance: float,
+) -> tuple[int, list[float]]:
+    """Count source values having a reference value within tolerance."""
+
+    count = 0
+    diffs = []
+
+    for x in source:
+        k = bisect_left(reference, x)
+        best = min(
+            (abs(x - reference[j]) for j in (k - 1, k) if 0 <= j < len(reference)),
+            default=None,
+        )
+
+        if best is not None and best <= tolerance:
+            count += 1
+            diffs.append(best)
+
+    return count, diffs
+
 
 def compare_timestamp_series(
-    first: list[datetime],
-    second: list[datetime],
+    first: list[float],
+    second: list[float],
     tolerance_seconds: float,
+    kind_first: str,
+    kind_second: str,
 ) -> dict:
 
     result = {
         "comparison_status": "analysed",
-        "timezone_compatible": False,
+        "time_kind": kind_first,
         "overlap_start": "",
         "overlap_end": "",
         "overlap_duration_seconds": None,
@@ -419,6 +392,8 @@ def compare_timestamp_series(
         "second_unmatched": len(second),
         "match_rate_first_percent": 0.0,
         "match_rate_second_percent": 0.0,
+        "match_rate_sparser_percent": 0.0,
+        "sampling_note": "",
         "mean_match_difference_seconds": None,
         "max_match_difference_seconds": None,
     }
@@ -427,125 +402,67 @@ def compare_timestamp_series(
         result["comparison_status"] = "empty_series"
         return result
 
-    first_aware = first[0].tzinfo is not None
-    second_aware = second[0].tzinfo is not None
-
-    if first_aware != second_aware:
-        result["comparison_status"] = "incompatible_timezones"
+    if kind_first != kind_second:
+        result["comparison_status"] = "incompatible_time_axes"
         return result
 
-    result["timezone_compatible"] = True
+    start = max(first[0], second[0])
+    end = min(first[-1], second[-1])
 
-    first_seconds = sorted(
-        timestamp_to_seconds(item) for item in first
-    )
-
-    second_seconds = sorted(
-        timestamp_to_seconds(item) for item in second
-    )
-
-    overlap_start = max(
-        first_seconds[0],
-        second_seconds[0],
-    )
-
-    overlap_end = min(
-        first_seconds[-1],
-        second_seconds[-1],
-    )
-
-    if overlap_start > overlap_end:
+    if start > end:
         result["comparison_status"] = "no_temporal_overlap"
         return result
 
-    result["overlap_start"] = datetime_from_seconds(
-        overlap_start, first_aware
+    result["overlap_start"] = start
+    result["overlap_end"] = end
+    result["overlap_duration_seconds"] = end - start
+
+    a = [v for v in first if start <= v <= end]
+    b = [v for v in second if start <= v <= end]
+
+    # Nearest-neighbour matching: each timestamp is compared with the
+    # closest timestamp of the other series (no drift when the two
+    # products are sampled at different rates).
+    count_a, diffs_a = count_within_tolerance(a, b, tolerance_seconds)
+    count_b, diffs_b = count_within_tolerance(b, a, tolerance_seconds)
+
+    # Matches are counted from the sparser series' point of view.
+    matched, diffs = (
+        (count_a, diffs_a) if len(a) <= len(b) else (count_b, diffs_b)
     )
-
-    result["overlap_end"] = datetime_from_seconds(
-        overlap_end, first_aware
-    )
-
-    result["overlap_duration_seconds"] = (
-        overlap_end - overlap_start
-    )
-
-    # Restrict matching to the common time interval.
-    a = [
-        value for value in first_seconds
-        if overlap_start <= value <= overlap_end
-    ]
-
-    b = [
-        value for value in second_seconds
-        if overlap_start <= value <= overlap_end
-    ]
-
-    # Greedy one-to-one matching using two pointers.
-    i = 0
-    j = 0
-    differences = []
-
-    while i < len(a) and j < len(b):
-
-        difference = a[i] - b[j]
-        absolute_difference = abs(difference)
-
-        if absolute_difference <= tolerance_seconds:
-            differences.append(absolute_difference)
-            i += 1
-            j += 1
-
-        elif difference < 0:
-            i += 1
-
-        else:
-            j += 1
-
-    matched = len(differences)
 
     result["matched_timestamps"] = matched
-    result["first_unmatched"] = len(a) - matched
-    result["second_unmatched"] = len(b) - matched
+    result["first_unmatched"] = len(a) - count_a
+    result["second_unmatched"] = len(b) - count_b
 
     if a:
-        result["match_rate_first_percent"] = round(
-            matched / len(a) * 100, 3
-        )
+        result["match_rate_first_percent"] = round(count_a / len(a) * 100, 3)
 
     if b:
-        result["match_rate_second_percent"] = round(
-            matched / len(b) * 100, 3
+        result["match_rate_second_percent"] = round(count_b / len(b) * 100, 3)
+
+    sparser = min(len(a), len(b))
+
+    if sparser:
+        # Relative to the sparser series, so a different sampling rate
+        # is not reported as a synchronization problem.
+        result["match_rate_sparser_percent"] = round(
+            matched / sparser * 100, 3
         )
 
-    if differences:
+    if a and b and max(len(a), len(b)) > 1.2 * min(len(a), len(b)):
+        result["sampling_note"] = (
+            "Series have different sampling densities; use "
+            "match_rate_sparser_percent."
+        )
+
+    if diffs:
         result["mean_match_difference_seconds"] = round(
-            sum(differences) / len(differences), 6
+            sum(diffs) / len(diffs), 6
         )
-
-        result["max_match_difference_seconds"] = round(
-            max(differences), 6
-        )
+        result["max_match_difference_seconds"] = round(max(diffs), 6)
 
     return result
-
-
-def datetime_from_seconds(
-    value: float,
-    timezone_aware: bool,
-) -> str:
-
-    if timezone_aware:
-        return datetime.fromtimestamp(
-            value,
-            tz=timezone.utc,
-        ).isoformat()
-
-    reference = datetime(1970, 1, 1)
-
-    from datetime import timedelta
-
-    return (reference + timedelta(seconds=value)).isoformat()
 
 
 # ---------------------------------------------------------
@@ -600,8 +517,8 @@ def build_summary(
             row["comparison_status"] == "no_temporal_overlap"
             for row in pair_reports
         ),
-        "pairs_with_incompatible_timezones": sum(
-            row["comparison_status"] == "incompatible_timezones"
+        "pairs_with_incompatible_time_axes": sum(
+            row["comparison_status"] == "incompatible_time_axes"
             for row in pair_reports
         ),
         "pairs_with_matches": sum(
@@ -609,10 +526,9 @@ def build_summary(
             for row in analysed_pairs
         ),
         "important_limitations": [
-            "Only ISO 8601 timestamps are parsed.",
-            "Numeric mission-specific time formats are not converted.",
-            "Timezone-aware and timezone-naive series are not compared.",
-            "Matching is one-to-one within the configured tolerance.",
+            "Series are compared only on the same time axis (default SCLK).",
+            "No axis is converted to UTC.",
+            "Matching is nearest-neighbour within the configured tolerance.",
             "A timestamp match does not prove scientific equivalence.",
             "Different MEDA products may have different sampling schedules.",
             "Temporal overlap does not establish complete measurement coverage.",
@@ -669,8 +585,6 @@ def run(args: argparse.Namespace):
         if metadata_record is None:
             continue
 
-        candidates = discover_time_candidates(metadata_record)
-
         sol_number = item.get("sol_number", "")
         product_code = item.get("product_code", "")
 
@@ -679,26 +593,23 @@ def run(args: argparse.Namespace):
             f"Analysing {csv_path.name}"
         )
 
-        result = analyse_timestamp_file(
+        file_report, seconds = analyse_timestamp_file(
             csv_path,
-            candidates,
+            metadata_record,
             sol_number,
             product_code,
+            tuple(args.time_axis),
         )
 
-        if isinstance(result, tuple):
-            file_report, timestamps = result
-            file_reports.append(file_report)
+        file_reports.append(file_report)
 
-            if timestamps:
-                series_by_sol[str(sol_number)].append({
-                    "product_code": product_code,
-                    "csv_file": csv_path.name,
-                    "timestamps": timestamps,
-                })
-
-        else:
-            file_reports.append(result)
+        if seconds:
+            series_by_sol[str(sol_number)].append({
+                "product_code": product_code,
+                "csv_file": csv_path.name,
+                "timestamps": seconds,
+                "time_kind": file_report["time_kind"],
+            })
 
     # Compare every available product pair within each Sol.
     pair_reports = []
@@ -711,6 +622,8 @@ def run(args: argparse.Namespace):
                 first["timestamps"],
                 second["timestamps"],
                 args.tolerance,
+                first["time_kind"],
+                second["time_kind"],
             )
 
             pair_reports.append({
@@ -735,7 +648,8 @@ def run(args: argparse.Namespace):
         "duplicate_timestamps",
         "first_timestamp",
         "last_timestamp",
-        "timezone_type",
+        "time_kind",
+        "median_step_seconds",
         "notes",
     ]
 
@@ -746,7 +660,7 @@ def run(args: argparse.Namespace):
         "product_2",
         "file_2",
         "comparison_status",
-        "timezone_compatible",
+        "time_kind",
         "overlap_start",
         "overlap_end",
         "overlap_duration_seconds",
@@ -757,6 +671,8 @@ def run(args: argparse.Namespace):
         "second_unmatched",
         "match_rate_first_percent",
         "match_rate_second_percent",
+        "match_rate_sparser_percent",
+        "sampling_note",
         "mean_match_difference_seconds",
         "max_match_difference_seconds",
     ]
@@ -837,6 +753,14 @@ def parse_args():
     parser.add_argument(
         "--summary",
         default=str(DEFAULT_SUMMARY),
+    )
+
+    parser.add_argument(
+        "--time-axis",
+        nargs="+",
+        default=list(DEFAULT_AXIS_PREFERENCE),
+        choices=list(PARSERS),
+        help="Time axis preference order (default: sclk first).",
     )
 
     parser.add_argument(
