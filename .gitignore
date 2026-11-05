@@ -34,3 +34,5 @@ input/*
 # Test input and output directories
 /input_test/
 /output_test/
+# Local testing data - do not upload to GitHub
+/z__________/
