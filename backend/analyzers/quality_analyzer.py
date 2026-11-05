@@ -28,11 +28,10 @@ TOP_VALUE_LIMIT = 20
 VALUE_TRACKING_LIMIT = 5000
 
 SOL_PATTERN = re.compile(
-    r"^sol[_-]?0*(\d+)$",
+    r"^sol[\_-]?0*(\d+)$",
     re.IGNORECASE,
 )
 
-# Classification uses complete tokens, not arbitrary substrings.
 QUALITY_TERMS = {
     "quality",
     "qual",
@@ -77,9 +76,7 @@ UNCERTAINTY_TERMS = {
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
-
-# These two aliases were validated against the WS files in this project.
-# They are accepted only at their exact positions and with 18 total fields.
+# Validated aliases: exact positions and exactly 18 fields only.
 WS_VALIDATED_ALIASES = {
     15: (
         "BOOM1_ALG_IN_STABLE_STATE",
@@ -90,7 +87,6 @@ WS_VALIDATED_ALIASES = {
         "BOOM2_ALG_STATE_STABLE",
     ),
 }
-
 
 REPORT_COLUMNS = [
     "sol_number",
@@ -122,6 +118,7 @@ REPORT_COLUMNS = [
 # --------------------------------------------------
 
 def normalize_name(value: Any) -> str:
+    """Use the shared MEDA field-name normalization."""
     return norm(value)
 
 
@@ -160,28 +157,46 @@ def is_missing(value: Any) -> bool:
 def safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def get_sol_number(value: Any) -> int | None:
+    """
+    Accept either a numeric Sol value or a SOL folder name.
+
+    Kept as a public helper for compatibility with callers.
+    """
     if value is None:
         return None
 
     try:
-        return int(value)
-    except (TypeError, ValueError):
+        number = int(value)
+        return number if number >= 0 else None
+    except (TypeError, ValueError, OverflowError):
         pass
 
-    match = SOL_PATTERN.match(str(value))
+    match = SOL_PATTERN.fullmatch(str(value).strip())
 
-    return int(match.group(1)) if match else None
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1))
+    except (ValueError, OverflowError):
+        return None
 
 
 def get_product_code(filename: str) -> str:
+    """
+    Extract a product code from a MEDA filename.
+
+    The empty-string return is retained for compatibility
+    with the current quality report schema.
+    """
     match = re.search(
         r"(?:^|_)CAL_([A-Z0-9]+)(?:_|\.|$)",
-        filename,
+        str(filename or ""),
         re.IGNORECASE,
     )
 
@@ -189,12 +204,48 @@ def get_product_code(filename: str) -> str:
 
 
 def normalize_relative_path(value: Any) -> str:
+    """
+    Normalize path separators and case for matching.
+
+    This is a comparison key only. It does not modify actual paths.
+    """
+    if value is None:
+        return ""
+
     return (
-        str(value or "")
+        str(value)
         .replace("\\", "/")
         .strip("/")
         .casefold()
     )
+
+
+def relative_xml_path(csv_relative_path: Any) -> str:
+    """Convert an inventory CSV relative path to its XML counterpart."""
+    if not csv_relative_path:
+        return ""
+
+    normalized = str(csv_relative_path).replace("\\", "/")
+
+    try:
+        xml_path = Path(normalized).with_suffix(".xml")
+    except (TypeError, ValueError):
+        return ""
+
+    return normalize_relative_path(xml_path.as_posix())
+
+
+def relative_csv_path(value: Any) -> Path | None:
+    """Convert an inventory relative path into a platform path."""
+    if not value:
+        return None
+
+    normalized = str(value).replace("\\", "/")
+
+    try:
+        return Path(normalized)
+    except (TypeError, ValueError):
+        return None
 
 
 # --------------------------------------------------
@@ -205,24 +256,26 @@ class BoundedValueCounter:
     """
     Space-Saving frequency tracker.
 
-    Memory use is bounded by VALUE_TRACKING_LIMIT.
+    Memory is bounded by the configured capacity.
+
     Top-value counts are approximate if capacity is reached.
-    The distinct count is reported as a lower bound when capped.
+    Distinct count is a lower bound when distinct tracking is capped.
     """
 
     def __init__(
         self,
         capacity: int = VALUE_TRACKING_LIMIT,
     ):
+        if not isinstance(capacity, int) or capacity < 1:
+            raise ValueError("capacity must be a positive integer.")
+
         self.capacity = capacity
         self.counts: dict[str, int] = {}
         self.seen_values: set[str] = set()
         self.distinct_tracking_capped = False
 
     def add(self, value: str) -> None:
-
         if value not in self.seen_values:
-
             if len(self.seen_values) < self.capacity:
                 self.seen_values.add(value)
             else:
@@ -242,13 +295,14 @@ class BoundedValueCounter:
         )
 
         minimum_count = self.counts.pop(least_common)
-
         self.counts[value] = minimum_count + 1
 
     def top_values(
         self,
         limit: int = TOP_VALUE_LIMIT,
     ) -> dict:
+        if limit < 0:
+            raise ValueError("limit cannot be negative.")
 
         return dict(
             sorted(
@@ -266,6 +320,7 @@ class BoundedValueCounter:
 # --------------------------------------------------
 
 def load_inventory(path: Path) -> list[dict]:
+    path = Path(path)
 
     if not path.exists():
         raise FileNotFoundError(
@@ -281,6 +336,7 @@ def load_inventory(path: Path) -> list[dict]:
 
 
 def load_metadata(path: Path) -> dict:
+    path = Path(path)
 
     if not path.exists():
         raise FileNotFoundError(
@@ -309,11 +365,10 @@ def load_metadata(path: Path) -> dict:
 
 
 # --------------------------------------------------
-# Metadata indexing
+# Metadata indexing and matching
 # --------------------------------------------------
 
 def metadata_sol(record: dict) -> str:
-
     sol = record.get("sol_folder")
 
     if sol:
@@ -331,49 +386,61 @@ def build_metadata_index(metadata: dict) -> dict:
     """
     Build metadata indexes without silently overwriting duplicates.
 
-    Matching priority:
-      1. Sol folder + XML filename
-      2. Relative XML path
-      3. Unique XML filename stem
-    """
+    Indexes:
+      - Sol folder + XML filename
+      - source_relative_path
+      - legacy relative_path
+      - XML filename stem
 
+    Both relative-path fields are indexed independently.
+    A record is not inserted twice under the same normalized path.
+    """
     by_sol_name = defaultdict(list)
     by_path = defaultdict(list)
     by_stem = defaultdict(list)
 
-    for record in metadata.get("records", []):
+    records = metadata.get("records", [])
 
+    if not isinstance(records, list):
+        records = []
+
+    for record in records:
         if not isinstance(record, dict):
             continue
 
-        source_file = str(
-            record.get("source_file") or ""
-        )
+        source_file = str(record.get("source_file") or "")
 
         if not source_file:
             continue
 
+        normalized_source = source_file.replace("\\", "/")
+
+        source_name = Path(normalized_source).name.casefold()
+        stem = Path(normalized_source).stem.casefold()
         sol = metadata_sol(record)
-        source_name = Path(source_file).name.casefold()
-        stem = Path(source_file).stem.casefold()
 
         if sol:
-            by_sol_name[
-                (sol, source_name)
-            ].append(record)
+            by_sol_name[(sol, source_name)].append(record)
 
         by_stem[stem].append(record)
 
-        relative_path = (
-            record.get("source_relative_path")
-            or record.get("relative_path")
-        )
+        indexed_paths = set()
 
-        if relative_path:
+        for path_field in (
+            "source_relative_path",
+            "relative_path",
+        ):
             normalized_path = normalize_relative_path(
-                relative_path
+                record.get(path_field)
             )
 
+            if not normalized_path:
+                continue
+
+            if normalized_path in indexed_paths:
+                continue
+
+            indexed_paths.add(normalized_path)
             by_path[normalized_path].append(record)
 
     return {
@@ -381,30 +448,52 @@ def build_metadata_index(metadata: dict) -> dict:
         "by_path": by_path,
         "by_stem": by_stem,
     }
-
-
 def find_metadata_record(
     inventory_row: dict,
     index: dict,
 ) -> tuple[dict | None, str]:
+    """
+    Find an XML record for an inventory CSV row.
 
-    filename = str(
-        inventory_row.get("filename") or ""
-    )
+    Matching priority:
+      1. Unique relative path match
+      2. Unique Sol + filename match
+      3. Unique filename stem
+
+    Relative paths are preferred because they can distinguish
+    nested files that share the same filename.
+    """
+    filename = str(inventory_row.get("filename") or "")
 
     if not filename:
         return None, "missing_inventory_filename"
 
-    xml_name = Path(filename).stem + ".xml"
+    filename_path = Path(filename.replace("\\", "/"))
+    xml_name = (filename_path.stem + ".xml").casefold()
 
+    # 1. Prefer an exact relative-path match.
+    relative_path = inventory_row.get("relative_path")
+
+    if relative_path:
+        xml_relative = relative_xml_path(relative_path)
+
+        if xml_relative:
+            matches = index["by_path"].get(xml_relative, [])
+
+            if len(matches) == 1:
+                return matches[0], "matched_by_relative_path"
+
+            if len(matches) > 1:
+                return None, "ambiguous_metadata_path"
+
+    # 2. Fall back to Sol + filename.
     sol_folder = str(
         inventory_row.get("sol_folder") or ""
     ).casefold()
 
     if sol_folder:
-
         matches = index["by_sol_name"].get(
-            (sol_folder, xml_name.casefold()),
+            (sol_folder, xml_name),
             [],
         )
 
@@ -414,26 +503,8 @@ def find_metadata_record(
         if len(matches) > 1:
             return None, "ambiguous_metadata_match"
 
-    relative_path = inventory_row.get("relative_path")
-
-    if relative_path:
-
-        xml_relative = normalize_relative_path(
-            str(Path(str(relative_path)).with_suffix(".xml"))
-        )
-
-        matches = index["by_path"].get(
-            xml_relative,
-            [],
-        )
-
-        if len(matches) == 1:
-            return matches[0], "matched_by_relative_path"
-
-        if len(matches) > 1:
-            return None, "ambiguous_metadata_path"
-
-    stem = Path(filename).stem.casefold()
+    # 3. Fall back to a unique filename stem.
+    stem = filename_path.stem.casefold()
     matches = index["by_stem"].get(stem, [])
 
     if len(matches) == 1:
@@ -453,15 +524,20 @@ def find_csv_path(
     input_root: Path,
     inventory_row: dict,
 ) -> Path | None:
+    """
+    Resolve an inventory CSV path.
 
-    relative_path = inventory_row.get("relative_path")
+    Relative path has priority. Filename fallback is accepted only
+    when it resolves uniquely.
+    """
+    input_root = Path(input_root).expanduser()
 
-    if relative_path:
+    relative_path = relative_csv_path(
+        inventory_row.get("relative_path")
+    )
 
-        candidate = (
-            input_root
-            / Path(str(relative_path))
-        )
+    if relative_path is not None:
+        candidate = input_root / relative_path
 
         if candidate.is_file():
             return candidate
@@ -477,8 +553,10 @@ def find_csv_path(
     if not filename:
         return None
 
-    if sol_folder:
+    filename_path = Path(filename.replace("\\", "/"))
+    filename = filename_path.name
 
+    if sol_folder:
         sol_directory = input_root / sol_folder
         direct = sol_directory / filename
 
@@ -486,7 +564,6 @@ def find_csv_path(
             return direct
 
         if sol_directory.is_dir():
-
             matches = [
                 path
                 for path in sol_directory.rglob("*")
@@ -499,6 +576,9 @@ def find_csv_path(
 
             if len(matches) > 1:
                 return None
+
+    if not input_root.is_dir():
+        return None
 
     matches = [
         path
@@ -515,7 +595,6 @@ def find_csv_path(
 # --------------------------------------------------
 
 def get_fields(record: dict) -> list[dict]:
-
     fields = record.get("fields", [])
 
     if not isinstance(fields, list):
@@ -539,7 +618,6 @@ def field_description(field: dict) -> str:
 
 
 def field_search_tokens(field: dict) -> set[str]:
-
     searchable = " ".join(
         str(field.get(key) or "")
         for key in (
@@ -556,10 +634,9 @@ def field_is_quality_candidate(field: dict) -> bool:
     """
     Identify explicit quality-related candidates.
 
-    Generic flag/status/state words alone are not sufficient.
-    This is a keyword candidate, not a scientific classification.
+    This is keyword-based candidate selection only.
+    It does not interpret undocumented flag values.
     """
-
     tokens = field_search_tokens(field)
 
     return bool(tokens.intersection(QUALITY_TERMS))
@@ -569,11 +646,8 @@ def field_is_operational_context_candidate(
     field: dict,
 ) -> bool:
     """
-    Identify possible operational/context flags.
-
-    These candidates are kept separate from quality candidates.
+    Identify possible operational/context flags separately.
     """
-
     tokens = field_search_tokens(field)
 
     has_flag_term = bool(
@@ -600,11 +674,10 @@ def field_is_operational_context_candidate(
 
 def field_is_uncertainty_candidate(field: dict) -> bool:
     """
-    Identify measurement uncertainty candidates by documented wording.
+    Identify uncertainty-related fields by documented wording.
 
-    This does not interpret uncertainty values or calculate uncertainty.
+    No uncertainty values are interpreted or recalculated.
     """
-
     tokens = field_search_tokens(field)
 
     return bool(
@@ -615,7 +688,6 @@ def field_is_uncertainty_candidate(field: dict) -> bool:
 def get_field_bounds(
     field: dict,
 ) -> tuple[float | None, float | None]:
-
     minimum = safe_float(
         field.get("valid_minimum")
     )
@@ -628,7 +700,6 @@ def get_field_bounds(
 
 
 def field_has_range(field: dict) -> bool:
-
     minimum, maximum = get_field_bounds(field)
 
     return (
@@ -641,16 +712,14 @@ def select_field_categories(
     fields: list[dict],
 ) -> list[tuple[int, dict, list[str]]]:
     """
-    Select fields for separate descriptive analysis categories.
+    Select descriptive analysis categories.
 
-    A field may belong to more than one category.
+    A field may belong to multiple categories.
     No category is treated as a scientific quality verdict.
     """
-
     selected = []
 
     for index, field in enumerate(fields):
-
         categories = []
 
         if field_is_quality_candidate(field):
@@ -680,23 +749,22 @@ def select_field_categories(
 # --------------------------------------------------
 
 def build_column_mapping(
-    first_row: list[str],
+    first_row: list[str] | None,
     fields: list[dict],
     has_header: Any,
 ) -> tuple[dict[int, int] | None, bool, str]:
     """
     Map XML field positions to CSV column positions.
 
-    Supported mapping modes:
+    Supported modes:
       - Exact header match
       - Reordered unique header
-      - Validated RHS duplicate XML-name positional mapping
+      - Validated duplicate XML-name positional mapping
       - Validated WS aliases at exact positions
-      - Safe positional mapping for explicitly headerless CSV
+      - Positional mapping when XML explicitly declares no header
 
     Ambiguous mappings are rejected.
     """
-
     field_names = [
         normalize_name(field.get("name") or "")
         for field in fields
@@ -707,6 +775,20 @@ def build_column_mapping(
         or any(not name for name in field_names)
     ):
         return None, False, "invalid_xml_field_names"
+
+    # XML explicitly declares a headerless CSV.
+    if has_header is False:
+        return (
+            {
+                index: index
+                for index in range(len(fields))
+            },
+            False,
+            "headerless_positional_mapping",
+        )
+
+    if first_row is None:
+        return None, False, "invalid_csv_header_names"
 
     header_names = [
         normalize_name(value)
@@ -748,16 +830,10 @@ def build_column_mapping(
     }
 
     # Validated positional mapping for duplicate XML names.
-    #
-    # Every unique XML field must match the CSV header at the
-    # same position. The CSV header must uniquely distinguish
-    # all positions in each duplicate XML-name group.
     if duplicate_groups:
-
         safe_positional_match = True
 
         for index, xml_name in enumerate(field_names):
-
             if xml_name in duplicate_groups:
                 continue
 
@@ -766,9 +842,7 @@ def build_column_mapping(
                 break
 
         if safe_positional_match:
-
             for positions in duplicate_groups.values():
-
                 csv_names = [
                     header_names[index]
                     for index in positions
@@ -779,7 +853,6 @@ def build_column_mapping(
                     break
 
         if safe_positional_match:
-
             return (
                 {
                     index: index
@@ -796,15 +869,7 @@ def build_column_mapping(
         )
 
     # Validated WS aliases.
-    #
-    # This is intentionally narrow:
-    # - Exactly 18 fields
-    # - Exactly 18 CSV columns
-    # - Differences only at positions 15 and 16
-    # - Both differences must match the known aliases
     if len(fields) == 18:
-
-        expected_names = list(field_names)
         alias_positions = set(WS_VALIDATED_ALIASES)
 
         differences = {
@@ -815,13 +880,11 @@ def build_column_mapping(
         }
 
         if differences == alias_positions:
-
             aliases_match = True
 
             for index, (xml_alias, csv_alias) in (
                 WS_VALIDATED_ALIASES.items()
             ):
-
                 if field_names[index] != normalize_name(xml_alias):
                     aliases_match = False
                     break
@@ -837,7 +900,6 @@ def build_column_mapping(
             )
 
             if aliases_match and other_positions_match:
-
                 return (
                     {
                         index: index
@@ -857,7 +919,6 @@ def build_column_mapping(
         name in header_positions
         for name in field_names
     ):
-
         mapping = {
             xml_index: header_positions[field_name]
             for xml_index, field_name
@@ -870,7 +931,6 @@ def build_column_mapping(
             "header_reordered_mapped",
         )
 
-    # Explicit XML declaration that a header exists.
     if has_header is True:
         return (
             None,
@@ -878,7 +938,6 @@ def build_column_mapping(
             "header_mapping_mismatch",
         )
 
-    # Unknown header declaration plus partial matches is ambiguous.
     matching_names = (
         set(field_names)
         .intersection(set(header_names))
@@ -889,19 +948,6 @@ def build_column_mapping(
             None,
             False,
             "partial_header_match",
-        )
-
-    # Positional mapping is allowed only when XML explicitly says
-    # the CSV has no header.
-    if has_header is False:
-
-        return (
-            {
-                index: index
-                for index in range(len(fields))
-            },
-            False,
-            "headerless_positional_mapping",
         )
 
     return (
@@ -919,7 +965,6 @@ def new_field_stats(
     field: dict,
     category: str,
 ) -> dict:
-
     minimum, maximum = get_field_bounds(field)
 
     return {
@@ -942,7 +987,6 @@ def update_field_stats(
     stats: dict,
     raw_value: str | None,
 ) -> None:
-
     stats["total_rows"] += 1
 
     if is_missing(raw_value):
@@ -984,7 +1028,6 @@ def make_report_row(
     status: str,
     notes: str,
 ) -> dict:
-
     sol_folder = str(
         inventory_row.get("sol_folder") or ""
     )
@@ -993,10 +1036,12 @@ def make_report_row(
         inventory_row.get("filename") or ""
     )
 
-    sol_number = (
-        get_sol_number(inventory_row.get("sol_number"))
-        or get_sol_number(sol_folder)
+    sol_number = get_sol_number(
+        inventory_row.get("sol_number")
     )
+
+    if sol_number is None:
+        sol_number = get_sol_number(sol_folder)
 
     product_code = (
         inventory_row.get("product_code")
@@ -1091,9 +1136,9 @@ def analyze_csv(
     xml_record: dict | None,
     metadata_status: str,
 ) -> list[dict]:
+    csv_path = Path(csv_path)
 
     if xml_record is None:
-
         return [
             make_report_row(
                 inventory_row,
@@ -1108,7 +1153,6 @@ def analyze_csv(
     fields = get_fields(xml_record)
 
     if not fields:
-
         return [
             make_report_row(
                 inventory_row,
@@ -1123,7 +1167,6 @@ def analyze_csv(
     selected = select_field_categories(fields)
 
     if not selected:
-
         return [
             make_report_row(
                 inventory_row,
@@ -1139,19 +1182,16 @@ def analyze_csv(
         ]
 
     try:
-
         with csv_path.open(
             "r",
             encoding="utf-8-sig",
             newline="",
             errors="replace",
         ) as file:
-
             reader = csv.reader(file)
             first_row = next(reader, None)
 
             if first_row is None:
-
                 return [
                     make_report_row(
                         inventory_row,
@@ -1172,7 +1212,6 @@ def analyze_csv(
             )
 
             if mapping is None:
-
                 return [
                     make_report_row(
                         inventory_row,
@@ -1187,13 +1226,10 @@ def analyze_csv(
                     )
                 ]
 
-            # One statistics object per field/category.
             field_stats = []
 
             for field_index, field, categories in selected:
-
                 for category in categories:
-
                     field_stats.append({
                         "field_index": field_index,
                         "field": field,
@@ -1205,8 +1241,6 @@ def analyze_csv(
 
             malformed_rows = 0
 
-            # Keep processing streaming; do not materialize
-            # all remaining CSV rows in memory.
             if skip_first_row:
                 rows_iterator = reader
             else:
@@ -1215,8 +1249,8 @@ def analyze_csv(
                     reader,
                 )
 
+            # Process incrementally; do not load the full CSV into memory.
             for row in rows_iterator:
-
                 if (
                     not row
                     or not any(
@@ -1230,7 +1264,6 @@ def analyze_csv(
                     malformed_rows += 1
 
                 for item in field_stats:
-
                     field_index = item["field_index"]
                     csv_index = mapping.get(field_index)
 
@@ -1251,7 +1284,6 @@ def analyze_csv(
             report_rows = []
 
             for item in field_stats:
-
                 stats = item["stats"]
                 category = stats["category"]
 
@@ -1286,7 +1318,6 @@ def analyze_csv(
                     )
 
                 if stats["value_counter"].distinct_tracking_capped:
-
                     notes.append(
                         "Distinct-value tracking reached its configured "
                         "memory limit; the reported distinct count "
@@ -1294,14 +1325,12 @@ def analyze_csv(
                     )
 
                 if malformed_rows:
-
                     notes.append(
                         f"{malformed_rows} rows had a column count "
                         "different from the XML field count."
                     )
 
                 if category == "range_check":
-
                     notes.append(
                         "Values outside documented limits are flagged "
                         "for review, not automatically classified "
@@ -1322,7 +1351,6 @@ def analyze_csv(
             return report_rows
 
     except (OSError, UnicodeError, csv.Error) as error:
-
         return [
             make_report_row(
                 inventory_row,
@@ -1333,8 +1361,6 @@ def analyze_csv(
                 str(error),
             )
         ]
-
-
 # --------------------------------------------------
 # Full inventory analysis
 # --------------------------------------------------
@@ -1344,7 +1370,6 @@ def run_analysis(
     inventory: list[dict],
     metadata: dict,
 ) -> list[dict]:
-
     input_root = Path(input_root).expanduser()
 
     metadata_index = build_metadata_index(metadata)
@@ -1369,14 +1394,12 @@ def run_analysis(
         csv_records,
         start=1,
     ):
-
         csv_path = find_csv_path(
             input_root,
             inventory_row,
         )
 
         if csv_path is None:
-
             reports.append(
                 make_report_row(
                     inventory_row,
@@ -1387,7 +1410,6 @@ def run_analysis(
                     "CSV path could not be resolved uniquely.",
                 )
             )
-
             continue
 
         resolved_path = str(
@@ -1429,6 +1451,7 @@ def write_report(
     path: Path,
     rows: list[dict],
 ) -> None:
+    path = Path(path)
 
     path.parent.mkdir(
         parents=True,
@@ -1440,7 +1463,6 @@ def write_report(
         encoding="utf-8-sig",
         newline="",
     ) as file:
-
         writer = csv.DictWriter(
             file,
             fieldnames=REPORT_COLUMNS,
@@ -1456,7 +1478,6 @@ def write_report(
 # --------------------------------------------------
 
 def build_summary(rows: list[dict]) -> dict:
-
     analysed = [
         row
         for row in rows
@@ -1496,7 +1517,6 @@ def build_summary(rows: list[dict]) -> dict:
     mapping_statuses = Counter()
 
     for row in analysed:
-
         notes = str(row.get("notes") or "")
 
         match = re.search(
@@ -1613,6 +1633,7 @@ def save_summary(
     path: Path,
     summary: dict,
 ) -> None:
+    path = Path(path)
 
     path.parent.mkdir(
         parents=True,
@@ -1623,7 +1644,6 @@ def save_summary(
         "w",
         encoding="utf-8",
     ) as file:
-
         json.dump(
             summary,
             file,
@@ -1637,7 +1657,6 @@ def save_summary(
 # --------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-
     parser = argparse.ArgumentParser(
         description=(
             "Analyze MEDA quality-related candidates, "
@@ -1680,7 +1699,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-
     args = parse_args()
 
     print("Loading file inventory...")
