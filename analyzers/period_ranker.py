@@ -1,9 +1,11 @@
+
 """
 MEDA Period Ranker
 
-Ranks candidate Sol periods using available MEDA analysis reports.
+Compares candidate Sol windows using available MEDA analysis reports.
 
-This is an exploratory ranking tool, not a scientific quality verdict.
+This is an exploratory comparison tool, not a scientific validation
+or certification tool.
 
 Inputs:
     output/file_inventory.csv
@@ -24,10 +26,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 
 DEFAULT_OUTPUT_DIR = Path("output")
@@ -43,11 +46,15 @@ DEFAULT_SUMMARY = DEFAULT_OUTPUT_DIR / "period_ranking_summary.json"
 
 DEFAULT_START_SOL = 107
 DEFAULT_END_SOL = 250
-
 DEFAULT_WINDOW_SIZE = 10
 
-# Initial exploratory weights.
-# These weights are configurable and are not scientifically validated.
+METRIC_NAMES = (
+    "file_availability",
+    "data_integrity",
+    "quality_indicators",
+    "synchronization",
+)
+
 DEFAULT_WEIGHTS = {
     "file_availability": 0.20,
     "data_integrity": 0.45,
@@ -55,15 +62,82 @@ DEFAULT_WEIGHTS = {
     "synchronization": 0.20,
 }
 
+DEFAULT_INTEGRITY_WEIGHTS = {
+    "timestamps": 1.0,
+    "values": 1.0,
+}
+
 
 # ---------------------------------------------------------
-# Basic helpers
+# General helpers
 # ---------------------------------------------------------
+
+def safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    return number if math.isfinite(number) else None
+
+
+def safe_int(value: Any) -> int | None:
+    number = safe_float(value)
+
+    if number is None:
+        return None
+
+    if not number.is_integer():
+        return None
+
+    return int(number)
+
+
+def sol_number(value: Any) -> int | None:
+    return safe_int(value)
+
+
+def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
+    return max(low, min(high, value))
+
+
+def average(values: list[float]) -> float | None:
+    if not values:
+        return None
+
+    return sum(values) / len(values)
+
+
+def normalized_weights(weights: dict[str, float]) -> dict[str, float]:
+    cleaned = {}
+
+    for key, value in weights.items():
+        number = safe_float(value)
+
+        if number is None or number < 0:
+            raise ValueError(
+                f"Weight '{key}' must be finite and non-negative."
+            )
+
+        cleaned[key] = number
+
+    total = sum(cleaned.values())
+
+    if not math.isfinite(total) or total <= 0:
+        raise ValueError("At least one weight must be positive.")
+
+    return {
+        key: value / total
+        for key, value in cleaned.items()
+    }
+
 
 def read_csv(path: Path) -> list[dict]:
-
     if not path.exists():
-        print(f"WARNING: Report not found: {path}")
+        print(f"WARNING: Report not found; treating as unavailable: {path}")
         return []
 
     with path.open(
@@ -71,121 +145,30 @@ def read_csv(path: Path) -> list[dict]:
         encoding="utf-8-sig",
         newline="",
     ) as handle:
+        reader = csv.DictReader(handle)
 
-        return list(csv.DictReader(handle))
+        if not reader.fieldnames:
+            print(f"WARNING: Report has no header: {path}")
+            return []
 
-
-def safe_float(value) -> Optional[float]:
-
-    if value is None:
-        return None
-
-    try:
-        result = float(str(value).strip())
-
-        if result != result:
-            return None
-
-        return result
-
-    except (TypeError, ValueError):
-        return None
+        return list(reader)
 
 
-def safe_int(value) -> Optional[int]:
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    number = safe_float(value)
-
-    if number is None:
-        return None
-
-    return int(number)
-
-
-def sol_number(value) -> Optional[int]:
-
-    if value is None:
-        return None
-
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-
-
-def clamp(value: float, low=0.0, high=100.0) -> float:
-
-    return max(low, min(high, value))
-
-
-def average(values: list[float]) -> Optional[float]:
-
-    if not values:
-        return None
-
-    return sum(values) / len(values)
-
-
-def normalize_weights(weights: dict) -> dict:
-
-    positive = {
-        key: max(0.0, float(value))
-        for key, value in weights.items()
-    }
-
-    total = sum(positive.values())
-
-    if total <= 0:
-        raise ValueError("At least one ranking weight must be positive.")
-
-    return {
-        key: value / total
-        for key, value in positive.items()
-    }
-
-
-INTEGRITY_PARTS = (
-    ("timestamps", "ts_good", "ts_total"),
-    ("values", "val_good", "val_total"),
-    ("continuity", "cont_good", "cont_total"),
-)
-
-
-def integrity_from_totals(totals: dict, integrity_weights: dict):
-    """Weighted mean of the integrity components that have data.
-
-    Returns (score or None, {component: score}).
-    """
-    components = {}
-    accumulated = 0.0
-    weight_sum = 0.0
-
-    for name, good_key, total_key in INTEGRITY_PARTS:
-        total = totals.get(total_key, 0)
-
-        if total > 0:
-            value = totals.get(good_key, 0) / total * 100
-            components[name] = value
-            accumulated += value * integrity_weights[name]
-            weight_sum += integrity_weights[name]
-
-    score = accumulated / weight_sum if weight_sum > 0 else None
-    return score, components
-
-
-def load_json(path: Path) -> dict:
-
-    if not path.exists():
-        return {}
-
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-
-    return data if isinstance(data, dict) else {}
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(
+            data,
+            handle,
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
 
 
 # ---------------------------------------------------------
-# Window handling
+# Candidate windows
 # ---------------------------------------------------------
 
 def build_windows(
@@ -194,45 +177,31 @@ def build_windows(
     window_size: int,
 ) -> list[tuple[int, int]]:
 
+    if start_sol < 0 or end_sol < 0:
+        raise ValueError("Sol numbers cannot be negative.")
+
     if start_sol > end_sol:
-        raise ValueError("Start Sol cannot exceed end Sol.")
+        raise ValueError("Start Sol cannot exceed End Sol.")
 
     if window_size < 1:
         raise ValueError("Window size must be at least 1.")
 
     windows = []
-
     current = start_sol
 
     while current <= end_sol:
-
         window_end = min(
             current + window_size - 1,
             end_sol,
         )
 
         windows.append((current, window_end))
-
         current = window_end + 1
 
     return windows
 
 
-def find_window(
-    sol: int,
-    windows: list[tuple[int, int]],
-) -> Optional[tuple[int, int]]:
-
-    for start, end in windows:
-
-        if start <= sol <= end:
-            return start, end
-
-    return None
-
-
 def window_label(window: tuple[int, int]) -> str:
-
     return f"Sol {window[0]}-{window[1]}"
 
 
@@ -247,50 +216,41 @@ def analyse_inventory(
 ) -> dict:
 
     result = defaultdict(lambda: {
-        "expected_sols": set(),
-        "sols_with_files": set(),
-        "csv_sols": set(),
-        "xml_sols": set(),
         "products": set(),
-        "missing_pairs": 0,
+        "csv_files": 0,
+        "xml_files": 0,
         "inventory_entries": 0,
+        "missing_pairs": 0,
     })
 
-    all_sols = set(range(start_sol, end_sol + 1))
-
     for row in rows:
-
         sol = sol_number(row.get("sol_number"))
 
-        if sol is None or sol not in all_sols:
+        if sol is None or not start_sol <= sol <= end_sol:
             continue
 
         extension = (
-            row.get("extension") or ""
-        ).lower().lstrip(".")
+            str(row.get("extension") or "")
+            .strip()
+            .lower()
+            .lstrip(".")
+        )
 
-        product = (row.get("product_code") or "").strip()
-
-        if not product:
-            continue
+        product = str(row.get("product_code") or "").strip().upper()
 
         item = result[sol]
-
         item["inventory_entries"] += 1
-        item["sols_with_files"].add(sol)
 
         if extension == "csv":
-            item["products"].add(product)
+            item["csv_files"] += 1
 
-        if extension == "csv":
-            item["csv_sols"].add(sol)
+            if product:
+                item["products"].add(product)
 
         elif extension == "xml":
-            item["xml_sols"].add(sol)
+            item["xml_files"] += 1
 
-        pair_status = (
-            row.get("pair_status") or ""
-        ).lower()
+        pair_status = str(row.get("pair_status") or "").lower()
 
         if "missing" in pair_status:
             item["missing_pairs"] += 1
@@ -303,7 +263,6 @@ def analyse_inventory(
 # ---------------------------------------------------------
 
 def analyse_coverage(rows: list[dict]) -> dict:
-    """Read the Coverage Analyzer report (row_count, *_timestamp_count, numeric_*)."""
 
     result = defaultdict(lambda: {
         "files": 0,
@@ -314,12 +273,19 @@ def analyse_coverage(rows: list[dict]) -> dict:
         "numeric_values": 0,
         "numeric_missing": 0,
         "numeric_invalid": 0,
-        "span_seconds": 0.0,
-        "gap_seconds": 0.0,
     })
 
-    for row in rows:
+    fields = (
+        ("rows", "row_count"),
+        ("parsed_timestamps", "parsed_timestamp_count"),
+        ("missing_timestamps", "missing_timestamp_count"),
+        ("invalid_timestamps", "invalid_timestamp_count"),
+        ("numeric_values", "numeric_value_count"),
+        ("numeric_missing", "numeric_missing_count"),
+        ("numeric_invalid", "numeric_invalid_count"),
+    )
 
+    for row in rows:
         sol = sol_number(row.get("sol_number"))
 
         if sol is None:
@@ -327,19 +293,12 @@ def analyse_coverage(rows: list[dict]) -> dict:
 
         item = result[sol]
         item["files"] += 1
-        item["span_seconds"] += safe_float(row.get("span_seconds")) or 0.0
-        item["gap_seconds"] += safe_float(row.get("gap_total_seconds")) or 0.0
 
-        for target, column in (
-            ("rows", "row_count"),
-            ("parsed_timestamps", "parsed_timestamp_count"),
-            ("missing_timestamps", "missing_timestamp_count"),
-            ("invalid_timestamps", "invalid_timestamp_count"),
-            ("numeric_values", "numeric_value_count"),
-            ("numeric_missing", "numeric_missing_count"),
-            ("numeric_invalid", "numeric_invalid_count"),
-        ):
-            item[target] += safe_int(row.get(column)) or 0
+        for target, column in fields:
+            value = safe_int(row.get(column))
+
+            if value is not None and value >= 0:
+                item[target] += value
 
     return result
 
@@ -353,50 +312,52 @@ def analyse_quality(rows: list[dict]) -> dict:
     result = defaultdict(lambda: {
         "field_reports": 0,
         "analysed_fields": 0,
-        "total_values": 0,
-        "missing_values": 0,
-        "below_minimum": 0,
-        "above_maximum": 0,
         "range_checked_fields": 0,
         "range_checked_values": 0,
+        "below_minimum": 0,
+        "above_maximum": 0,
     })
 
     for row in rows:
-
         sol = sol_number(row.get("sol_number"))
 
         if sol is None:
             continue
 
         item = result[sol]
-
         item["field_reports"] += 1
 
-        if row.get("analysis_status") != "analysed":
+        if str(row.get("analysis_status") or "").lower() != "analysed":
             continue
 
         item["analysed_fields"] += 1
 
-        total = safe_int(row.get("total_rows")) or 0
-        missing = safe_int(row.get("missing_count")) or 0
-
-        item["total_values"] += total
-        item["missing_values"] += missing
-
-        below = safe_int(row.get("below_valid_minimum")) or 0
-        above = safe_int(row.get("above_valid_maximum")) or 0
-
-        item["below_minimum"] += below
-        item["above_maximum"] += above
-
         minimum = safe_float(row.get("valid_minimum"))
         maximum = safe_float(row.get("valid_maximum"))
 
-        if minimum is not None or maximum is not None:
-            item["range_checked_fields"] += 1
-            item["range_checked_values"] += (
-                safe_int(row.get("numeric_count")) or 0
-            )
+        # Only fields with at least one documented bound are
+        # considered range-checked.
+        if minimum is None and maximum is None:
+            continue
+
+        numeric_count = safe_int(row.get("numeric_count"))
+        below = safe_int(row.get("below_valid_minimum"))
+        above = safe_int(row.get("above_valid_maximum"))
+
+        if (
+            numeric_count is None
+            or below is None
+            or above is None
+            or numeric_count < 0
+            or below < 0
+            or above < 0
+        ):
+            continue
+
+        item["range_checked_fields"] += 1
+        item["range_checked_values"] += numeric_count
+        item["below_minimum"] += below
+        item["above_maximum"] += above
 
     return result
 
@@ -414,22 +375,21 @@ def analyse_sync_files(rows: list[dict]) -> dict:
     })
 
     for row in rows:
-
         sol = sol_number(row.get("sol_number"))
 
         if sol is None:
             continue
 
         item = result[sol]
-
         item["files"] += 1
 
-        if row.get("analysis_status") == "analysed":
+        if str(row.get("analysis_status") or "").lower() == "analysed":
             item["analysed_files"] += 1
 
-            item["parsed_timestamps"] += (
-                safe_int(row.get("parsed_timestamps")) or 0
-            )
+            count = safe_int(row.get("parsed_timestamps"))
+
+            if count is not None and count >= 0:
+                item["parsed_timestamps"] += count
 
     return result
 
@@ -439,42 +399,41 @@ def analyse_sync_pairs(rows: list[dict]) -> dict:
     result = defaultdict(lambda: {
         "pairs": 0,
         "analysed_pairs": 0,
-        "overlap_durations": [],
         "match_rates": [],
         "matched_timestamps": 0,
+        "overlap_durations": [],
     })
 
     for row in rows:
-
         sol = sol_number(row.get("sol_number"))
 
         if sol is None:
             continue
 
         item = result[sol]
-
         item["pairs"] += 1
 
-        if row.get("comparison_status") != "analysed":
+        if str(row.get("comparison_status") or "").lower() != "analysed":
             continue
 
         item["analysed_pairs"] += 1
 
-        overlap = safe_float(
-            row.get("overlap_duration_seconds")
-        )
-
-        if overlap is not None:
-            item["overlap_durations"].append(overlap)
-
         rate = safe_float(row.get("match_rate_sparser_percent"))
 
-        if rate is not None:
+        if rate is not None and 0 <= rate <= 100:
             item["match_rates"].append(rate)
 
-        item["matched_timestamps"] += (
-            safe_int(row.get("matched_timestamps")) or 0
-        )
+        matched = safe_int(row.get("matched_timestamps"))
+
+        if matched is not None and matched >= 0:
+            item["matched_timestamps"] += matched
+
+        # Current Synchronization Analyzer schema uses
+        # 'overlap_duration', not 'overlap_duration_seconds'.
+        overlap = safe_float(row.get("overlap_duration"))
+
+        if overlap is not None and overlap >= 0:
+            item["overlap_durations"].append(overlap)
 
     return result
 
@@ -483,6 +442,52 @@ def analyse_sync_pairs(rows: list[dict]) -> dict:
 # Per-Sol metric calculation
 # ---------------------------------------------------------
 
+def calculate_integrity(
+    coverage_data: dict,
+    integrity_weights: dict[str, float],
+) -> tuple[float | None, dict]:
+
+    parsed = coverage_data.get("parsed_timestamps", 0)
+    missing_ts = coverage_data.get("missing_timestamps", 0)
+    invalid_ts = coverage_data.get("invalid_timestamps", 0)
+
+    numeric = coverage_data.get("numeric_values", 0)
+    missing_numeric = coverage_data.get("numeric_missing", 0)
+    invalid_numeric = coverage_data.get("numeric_invalid", 0)
+
+    timestamp_total = parsed + missing_ts + invalid_ts
+    numeric_total = numeric + missing_numeric + invalid_numeric
+
+    components = {}
+    weighted_sum = 0.0
+    available_weight = 0.0
+
+    if timestamp_total > 0:
+        score = parsed / timestamp_total * 100
+        components["timestamps"] = score
+
+        weight = integrity_weights["timestamps"]
+
+        if weight > 0:
+            weighted_sum += score * weight
+            available_weight += weight
+
+    if numeric_total > 0:
+        score = numeric / numeric_total * 100
+        components["values"] = score
+
+        weight = integrity_weights["values"]
+
+        if weight > 0:
+            weighted_sum += score * weight
+            available_weight += weight
+
+    if available_weight <= 0:
+        return None, components
+
+    return weighted_sum / available_weight, components
+
+
 def calculate_sol_metrics(
     sol: int,
     inventory: dict,
@@ -490,8 +495,8 @@ def calculate_sol_metrics(
     quality: dict,
     sync_files: dict,
     sync_pairs: dict,
-    expected_products: list[str],
-    integrity_weights: dict,
+    required_products: list[str] | None,
+    integrity_weights: dict[str, float],
 ) -> dict:
 
     inventory_data = inventory.get(sol, {})
@@ -500,290 +505,238 @@ def calculate_sol_metrics(
     sync_file_data = sync_files.get(sol, {})
     sync_pair_data = sync_pairs.get(sol, {})
 
-    # File availability:
-    # This is product-Sol availability, not measurement completeness.
-    if expected_products:
+    # File availability is unavailable unless the user explicitly
+    # defines the expected product set.
+    file_score = None
+
+    if required_products:
+        available_products = inventory_data.get("products", set())
 
         available = sum(
-            product in inventory_data.get("products", set())
-            for product in expected_products
+            product in available_products
+            for product in required_products
         )
 
-        file_score = (
-            available / len(expected_products) * 100
-        )
+        file_score = available / len(required_products) * 100
 
-    else:
-
-        file_score = None
-
-    # Timestamp parsing (pooled counts, not an average of averages).
-    ts_good = coverage_data.get("parsed_timestamps", 0)
-    ts_total = (
-        ts_good
-        + coverage_data.get("missing_timestamps", 0)
-        + coverage_data.get("invalid_timestamps", 0)
+    integrity_score, integrity_components = calculate_integrity(
+        coverage_data,
+        integrity_weights,
     )
 
-    timestamp_score = ts_good / ts_total * 100 if ts_total else None
-
-    # Completeness over ALL numeric columns declared in the XML.
-    val_good = coverage_data.get("numeric_values", 0)
-    val_total = (
-        val_good
-        + coverage_data.get("numeric_missing", 0)
-        + coverage_data.get("numeric_invalid", 0)
-    )
-
-    completeness_score = (
-        val_good / val_total * 100 if val_total else None
-    )
-
-    # Continuity: share of the recorded time span not lost to gaps.
-    span = coverage_data.get("span_seconds", 0.0)
-    gap = min(coverage_data.get("gap_seconds", 0.0), span)
-
-    integrity_totals = {
-        "ts_good": ts_good,
-        "ts_total": ts_total,
-        "val_good": val_good,
-        "val_total": val_total,
-        "cont_good": span - gap,
-        "cont_total": span,
-    }
-
-    integrity_score, _ = integrity_from_totals(
-        integrity_totals, integrity_weights
-    )
-
-    # Quality indicator: share of range-checked numeric values inside
-    # XML-declared bounds. None when the XML declares no bounds.
+    # Range indicator only uses documented XML bounds.
     checked = quality_data.get("range_checked_values", 0)
+
+    quality_score = None
 
     if checked > 0:
         outside = (
             quality_data.get("below_minimum", 0)
             + quality_data.get("above_maximum", 0)
         )
-        quality_score = (1 - outside / checked) * 100
-    else:
-        quality_score = None
 
-    # Synchronization:
-    rates = sync_pair_data.get("match_rates", [])
+        if 0 <= outside <= checked:
+            quality_score = (checked - outside) / checked * 100
 
-    synchronization_score = average(rates)
-
-    if synchronization_score is None:
-        synchronization_score = None
+    # Mean of available analysed pair-level match rates.
+    # Pair rates are not interpreted as a universal instrument
+    # synchronization quality measure.
+    synchronization_score = average(
+        sync_pair_data.get("match_rates", [])
+    )
 
     return {
-        "file_availability_score": (
-            round(file_score, 3)
-            if file_score is not None else None
-        ),
-        "timestamp_coverage_score": (
-            round(timestamp_score, 3)
-            if timestamp_score is not None else None
-        ),
-        "data_completeness_score": (
-            round(clamp(completeness_score), 3)
-            if completeness_score is not None else None
-        ),
-        "quality_indicator_score": (
-            round(clamp(quality_score), 3)
-            if quality_score is not None else None
-        ),
-        "data_integrity_score": (
-            round(integrity_score, 3)
-            if integrity_score is not None else None
-        ),
-        **integrity_totals,
-        "synchronization_score": (
-            round(clamp(synchronization_score), 3)
-            if synchronization_score is not None else None
-        ),
-        "available_products": len(
-            inventory_data.get("products", set())
-        ),
-        "expected_products": len(expected_products),
-        "csv_sols_present": len(
-            inventory_data.get("csv_sols", set())
-        ),
-        "xml_sols_present": len(
-            inventory_data.get("xml_sols", set())
-        ),
-        "parsed_timestamps": ts_good,
-        "missing_timestamps": ts_total - ts_good,
-        "quality_fields_analysed": (
-            quality_data.get("analysed_fields", 0)
-        ),
-        "quality_missing_values": val_total - val_good,
-        "range_checked_fields": (
-            quality_data.get("range_checked_fields", 0)
-        ),
-        "sync_pairs_analysed": (
-            sync_pair_data.get("analysed_pairs", 0)
-        ),
-        "matched_timestamps": (
-            sync_pair_data.get("matched_timestamps", 0)
+        "file_availability_score": file_score,
+        "data_integrity_score": integrity_score,
+        "integrity_timestamp_score": integrity_components.get("timestamps"),
+        "integrity_value_score": integrity_components.get("values"),
+        "quality_indicator_score": quality_score,
+        "synchronization_score": synchronization_score,
+        "available_products": len(inventory_data.get("products", set())),
+        "required_products": len(required_products or []),
+        "csv_files": inventory_data.get("csv_files", 0),
+        "xml_files": inventory_data.get("xml_files", 0),
+        "inventory_entries": inventory_data.get("inventory_entries", 0),
+        "missing_pairs": inventory_data.get("missing_pairs", 0),
+        "coverage_files": coverage_data.get("files", 0),
+        "parsed_timestamps": coverage_data.get("parsed_timestamps", 0),
+        "missing_timestamps": coverage_data.get("missing_timestamps", 0),
+        "invalid_timestamps": coverage_data.get("invalid_timestamps", 0),
+        "numeric_values": coverage_data.get("numeric_values", 0),
+        "numeric_missing": coverage_data.get("numeric_missing", 0),
+        "numeric_invalid": coverage_data.get("numeric_invalid", 0),
+        "quality_fields_analysed": quality_data.get("analysed_fields", 0),
+        "range_checked_fields": quality_data.get("range_checked_fields", 0),
+        "range_checked_values": checked,
+        "sync_files_analysed": sync_file_data.get("analysed_files", 0),
+        "sync_pairs_analysed": sync_pair_data.get("analysed_pairs", 0),
+        "matched_timestamps": sync_pair_data.get("matched_timestamps", 0),
+        "sync_match_rate_pair_count": len(
+            sync_pair_data.get("match_rates", [])
         ),
     }
 
 
 # ---------------------------------------------------------
-# Window aggregation and ranking
+# Window aggregation
 # ---------------------------------------------------------
 
 def aggregate_window(
     window: tuple[int, int],
     sol_metrics: dict,
-    weights: dict,
+    weights: dict[str, float],
     window_size: int,
-    min_sol_fraction: float = 0.5,
-    min_metrics: int = 3,
-    integrity_weights: dict | None = None,
+    min_sol_fraction: float,
+    min_metrics: int,
 ) -> dict:
-
-    integrity_weights = integrity_weights or {
-        "timestamps": 1.0, "values": 1.0, "continuity": 1.0,
-    }
-    integrity_components: dict = {}
 
     start, end = window
     sols = list(range(start, end + 1))
     total_sols = len(sols)
 
-    # (metric name, per-Sol score field, pooled (good, total) fields or None)
-    metric_defs = [
-        ("file_availability", "file_availability_score", None),
-        ("data_integrity", "data_integrity_score", "integrity"),
-        ("quality_indicators", "quality_indicator_score", None),
-        ("synchronization", "synchronization_score", None),
-    ]
+    metric_fields = {
+        "file_availability": "file_availability_score",
+        "data_integrity": "data_integrity_score",
+        "quality_indicators": "quality_indicator_score",
+        "synchronization": "synchronization_score",
+    }
 
-    metric_averages = {}
-    contributing = {}
-    reasons = []
-    available_weight = 0.0
+    metric_scores = {}
+    metric_sols = {}
+    contributing_metrics = []
+
     weighted_total = 0.0
+    available_weight = 0.0
 
-    for metric_name, field_name, pooled in metric_defs:
+    reasons = []
 
-        present = [
-            sol for sol in sols
+    minimum_sols = math.ceil(min_sol_fraction * total_sols)
+
+    for metric_name, field_name in metric_fields.items():
+
+        values = [
+            sol_metrics[sol][field_name]
+            for sol in sols
             if sol in sol_metrics
-            and sol_metrics[sol][field_name] is not None
+            and sol_metrics[sol].get(field_name) is not None
         ]
 
-        contributing[metric_name] = len(present)
+        metric_sols[metric_name] = len(values)
 
-        # Too few Sols carry this metric: treat it as unavailable
-        # instead of letting a single good Sol represent the window.
-        if len(present) < min_sol_fraction * total_sols or not present:
-            metric_averages[metric_name] = None
+        if len(values) < minimum_sols or not values:
+            metric_scores[metric_name] = None
+            reasons.append(
+                f"{metric_name}: unavailable "
+                f"({len(values)}/{total_sols} Sols met the availability threshold)."
+            )
             continue
 
-        if pooled == "integrity":
-            # Pool raw counts/seconds across Sols, then combine components.
-            totals = {
-                key: sum(sol_metrics[s][key] for s in present)
-                for _, good_key, total_key in INTEGRITY_PARTS
-                for key in (good_key, total_key)
-            }
-            metric_value, integrity_components = integrity_from_totals(
-                totals, integrity_weights
-            )
-        else:
-            metric_value = average([
-                sol_metrics[s][field_name] for s in present
-            ])
+        score = average(values)
+        metric_scores[metric_name] = score
 
-        metric_averages[metric_name] = metric_value
-
-        if metric_value is None:
+        if score is None:
             continue
 
         weight = weights[metric_name]
-        weighted_total += metric_value * weight
-        available_weight += weight
 
-    score = weighted_total / available_weight if available_weight > 0 else None
+        # Zero-weight metrics are diagnostic only.
+        # They must not affect the final score, the metric count,
+        # or the comparison-group signature.
+        if weight > 0:
+            contributing_metrics.append(metric_name)
+            weighted_total += score * weight
+            available_weight += weight
 
-    for metric_name, value in metric_averages.items():
+        reasons.append(
+            f"{metric_name}: {score:.2f}/100 "
+            f"({len(values)}/{total_sols} Sols)."
+        )
 
-        n = contributing[metric_name]
+    score = None
 
-        if value is None:
-            reasons.append(
-                f"{metric_name}: unavailable ({n}/{total_sols} Sols had data)."
-            )
-        elif value >= 90:
-            reasons.append(f"{metric_name}: strong observed indicator ({n}/{total_sols} Sols).")
-        elif value >= 70:
-            reasons.append(f"{metric_name}: moderate observed indicator ({n}/{total_sols} Sols).")
-        else:
-            reasons.append(f"{metric_name}: review recommended ({n}/{total_sols} Sols).")
+    if available_weight > 0:
+        score = weighted_total / available_weight
 
-    used = [k for k, v in metric_averages.items() if v is not None]
     is_partial = total_sols < window_size
 
-    if len(used) < min_metrics:
+    if len(contributing_metrics) < min_metrics:
         ranking_status = "insufficient_data"
         score = None
+
         reasons.append(
-            f"Only {len(used)} metric(s) available; at least {min_metrics} required."
+            f"Only {len(contributing_metrics)} positively weighted "
+            f"metric(s) available; {min_metrics} required."
         )
+
     elif is_partial:
         ranking_status = "partial_window"
+        score = None
+
         reasons.append(
-            f"Window has {total_sols} Sols (< {window_size}); not ranked against full windows."
+            "Partial window is not ranked against full candidate windows."
         )
+
     else:
         ranking_status = "rankable"
 
-    return {
+    # Only positively weighted metrics define the comparison group.
+    metric_signature = ",".join(contributing_metrics)
+
+    result = {
+        "rank": "",
+        "comparison_group": metric_signature or "no_available_metrics",
         "window_start_sol": start,
         "window_end_sol": end,
         "window_label": window_label(window),
         "ranking_status": ranking_status,
         "is_partial_window": is_partial,
-        "exploratory_score": round(score, 3) if score is not None else None,
-        "available_metrics": len(used),
-        "metrics_used": ",".join(used),
+        "exploratory_score": (
+            round(score, 3) if score is not None else None
+        ),
+        "available_metrics": len(contributing_metrics),
+        "metrics_used": metric_signature,
         "total_sols": total_sols,
-        **{
-            f"integrity_{name}_score": round(value, 3)
-            for name, value in integrity_components.items()
-        },
-        **{
-            f"{key}_score": round(value, 3) if value is not None else None
-            for key, value in metric_averages.items()
-        },
-        **{f"{key}_sols": n for key, n in contributing.items()},
         "reasons": " | ".join(reasons),
     }
 
+    for metric_name, value in metric_scores.items():
+        result[f"{metric_name}_score"] = (
+            round(value, 3) if value is not None else None
+        )
+        result[f"{metric_name}_sols"] = metric_sols[metric_name]
+
+    return result
+
+
+# ---------------------------------------------------------
+# Ranking
+# ---------------------------------------------------------
 
 def rank_windows(rows: list[dict]) -> list[dict]:
+    """
+    Rank only windows with the exact same available metric signature.
 
-    rankable = [
-        row for row in rows
-        if row["ranking_status"] == "rankable"
-    ]
+    A rank in one comparison group must not be interpreted as
+    directly comparable to a rank in another group.
+    """
 
-    rankable.sort(
-        key=lambda row: row["exploratory_score"],
-        reverse=True,
-    )
-
-    for rank, row in enumerate(rankable, start=1):
-        row["rank"] = rank
+    groups = defaultdict(list)
 
     for row in rows:
+        if row["ranking_status"] == "rankable":
+            groups[row["comparison_group"]].append(row)
 
-        if row["ranking_status"] != "rankable":
-            row["rank"] = ""
+    for group_rows in groups.values():
+        group_rows.sort(
+            key=lambda row: (
+                -row["exploratory_score"],
+                row["window_start_sol"],
+                row["window_end_sol"],
+            )
+        )
+
+        for rank, row in enumerate(group_rows, start=1):
+            row["rank"] = rank
 
     return rows
 
@@ -792,33 +745,31 @@ def rank_windows(rows: list[dict]) -> list[dict]:
 # Output
 # ---------------------------------------------------------
 
-def write_ranking_csv(path: Path, rows: list[dict]):
+RANKING_COLUMNS = [
+    "rank",
+    "comparison_group",
+    "window_start_sol",
+    "window_end_sol",
+    "window_label",
+    "ranking_status",
+    "is_partial_window",
+    "exploratory_score",
+    "available_metrics",
+    "metrics_used",
+    "total_sols",
+    "file_availability_score",
+    "data_integrity_score",
+    "quality_indicators_score",
+    "synchronization_score",
+    "file_availability_sols",
+    "data_integrity_sols",
+    "quality_indicators_sols",
+    "synchronization_sols",
+    "reasons",
+]
 
-    columns = [
-        "rank",
-        "window_start_sol",
-        "window_end_sol",
-        "window_label",
-        "ranking_status",
-        "is_partial_window",
-        "exploratory_score",
-        "available_metrics",
-        "metrics_used",
-        "total_sols",
-        "file_availability_score",
-        "data_integrity_score",
-        "integrity_timestamps_score",
-        "integrity_values_score",
-        "integrity_continuity_score",
-        "quality_indicators_score",
-        "synchronization_score",
-        "file_availability_sols",
-        "data_integrity_sols",
-        "quality_indicators_sols",
-        "synchronization_sols",
-        "reasons",
-    ]
 
+def write_ranking_csv(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with path.open(
@@ -829,7 +780,7 @@ def write_ranking_csv(path: Path, rows: list[dict]):
 
         writer = csv.DictWriter(
             handle,
-            fieldnames=columns,
+            fieldnames=RANKING_COLUMNS,
             extrasaction="ignore",
         )
 
@@ -842,47 +793,80 @@ def build_summary(
     weights: dict,
     start_sol: int,
     end_sol: int,
+    window_size: int,
+    required_products: list[str] | None,
+    min_sol_fraction: float,
+    min_metrics: int,
 ) -> dict:
 
-    ranked = [
+    rankable = [
         row for row in rows
         if row["ranking_status"] == "rankable"
     ]
 
-    best = ranked[0] if ranked else None
+    groups = defaultdict(list)
+
+    for row in rankable:
+        groups[row["comparison_group"]].append(row)
+
+    best_by_group = {}
+
+    for group_name, group_rows in groups.items():
+        best_by_group[group_name] = max(
+            group_rows,
+            key=lambda row: row["exploratory_score"],
+        )
+
+    single_global_best = None
+
+    if len(best_by_group) == 1:
+        single_global_best = next(iter(best_by_group.values()))
 
     return {
         "analyzer": "MEDA Period Ranker",
+        "ranking_type": "exploratory_comparative",
         "sol_range": {
             "start": start_sol,
             "end": end_sol,
         },
+        "window_size": window_size,
         "total_candidate_windows": len(rows),
-        "rankable_windows": len(ranked),
-        "unrankable_windows": len(rows) - len(ranked),
+        "rankable_windows": len(rankable),
+        "unrankable_windows": len(rows) - len(rankable),
+        "comparison_group_count": len(groups),
         "ranking_weights": weights,
-        "best_ranked_window": best,
+        "required_products": required_products,
+        "required_products_explicitly_configured": bool(required_products),
+        "min_sol_fraction": min_sol_fraction,
+        "min_metrics": min_metrics,
+        "best_ranked_window": single_global_best,
+        "best_ranked_windows_by_comparison_group": best_by_group,
         "important_limitations": [
             "Scores are exploratory indicators, not scientific validation.",
-            "Weights are configurable and not scientifically calibrated.",
-            "Unavailable metrics are excluded and remaining weights are renormalized.",
+            "Ranking weights are configurable and not scientifically calibrated.",
+            "Unavailable metrics are excluded and remaining positive weights are renormalized.",
+            "Zero-weight metrics do not contribute to scores or comparison groups.",
+            "Windows are ranked only against windows with the same available positively weighted metric set.",
+            "Ranks from different comparison groups are not directly comparable.",
+            "File availability is unavailable unless required products are explicitly configured.",
+            "Continuity is excluded because the current gap_total_seconds field is not a defensible missing-duration estimate.",
             "Quality flag meanings are not inferred.",
-            "Quality indicator score exists only where the XML declares valid_minimum/valid_maximum.",
+            "Quality indicator scores use only documented XML numerical bounds.",
             "Partial windows are listed but not ranked.",
-            "data_integrity merges timestamp validity, numeric-value validity and continuity (gap time); it is not a scientific quality score.",
             "Timestamp parsing success is not equivalent to sensor uptime.",
+            "Numeric completeness is not equivalent to scientific validity.",
+            "Synchronization scores are averages of available pair-level match rates and depend on sampling schedules and matching tolerance.",
             "Product availability does not establish measurement completeness.",
-            "Synchronization match rates depend on sampling schedules and tolerance.",
-            "Candidate windows should be reviewed before selecting final data.",
+            "Candidate periods require further review before research use.",
         ],
     }
 
 
 # ---------------------------------------------------------
-# Main
+# Main analysis
 # ---------------------------------------------------------
 
-def run(args):
+def run(args) -> dict:
 
     print("Loading analysis reports...")
 
@@ -892,7 +876,7 @@ def run(args):
     sync_file_rows = read_csv(Path(args.sync_files))
     sync_pair_rows = read_csv(Path(args.sync_pairs))
 
-    print("Aggregating reports...")
+    print("Aggregating analyzer reports...")
 
     inventory = analyse_inventory(
         inventory_rows,
@@ -905,31 +889,40 @@ def run(args):
     sync_files = analyse_sync_files(sync_file_rows)
     sync_pairs = analyse_sync_pairs(sync_pair_rows)
 
-    expected_products = args.required_products or sorted({
-        (row.get("product_code") or "").strip()
-        for row in inventory_rows
-        if row.get("product_code")
-    })
+    required_products = None
 
-    weights = normalize_weights({
+    if args.required_products is not None:
+        products = {
+            str(product).strip().upper()
+            for product in args.required_products
+            if str(product).strip()
+        }
+
+        if not products:
+            raise ValueError(
+                "When --required-products is supplied, "
+                "at least one product code must be provided."
+            )
+
+        required_products = sorted(products)
+
+    weights = normalized_weights({
         "file_availability": args.weight_files,
         "data_integrity": args.weight_integrity,
         "quality_indicators": args.weight_quality,
         "synchronization": args.weight_sync,
     })
 
-    integrity_weights = {
+    integrity_weights = normalized_weights({
         "timestamps": args.integrity_timestamps,
         "values": args.integrity_values,
-        "continuity": args.integrity_continuity,
-    }
+    })
 
-    print("Calculating Sol metrics...")
+    print("Calculating per-Sol metrics...")
 
     sol_metrics = {}
 
     for sol in range(args.start_sol, args.end_sol + 1):
-
         sol_metrics[sol] = calculate_sol_metrics(
             sol,
             inventory,
@@ -937,11 +930,9 @@ def run(args):
             quality,
             sync_files,
             sync_pairs,
-            expected_products,
+            required_products,
             integrity_weights,
         )
-
-    print("Building candidate windows...")
 
     windows = build_windows(
         args.start_sol,
@@ -949,10 +940,11 @@ def run(args):
         args.window_size,
     )
 
+    print("Evaluating candidate windows...")
+
     ranking_rows = []
 
     for window in windows:
-
         ranking_rows.append(
             aggregate_window(
                 window,
@@ -961,11 +953,10 @@ def run(args):
                 args.window_size,
                 args.min_sol_fraction,
                 args.min_metrics,
-                integrity_weights,
             )
         )
 
-    ranking_rows = rank_windows(ranking_rows)
+    rank_windows(ranking_rows)
 
     output_path = Path(args.output)
     summary_path = Path(args.summary)
@@ -977,6 +968,10 @@ def run(args):
         weights,
         args.start_sol,
         args.end_sol,
+        args.window_size,
+        required_products,
+        args.min_sol_fraction,
+        args.min_metrics,
     )
 
     summary["sol_metrics"] = {
@@ -992,33 +987,44 @@ def run(args):
         "sync_pairs": args.sync_pairs,
     }
 
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with summary_path.open("w", encoding="utf-8") as handle:
-        json.dump(
-            summary,
-            handle,
-            indent=2,
-            ensure_ascii=False,
-        )
+    write_json(summary_path, summary)
 
     print("\nPeriod ranking completed.")
     print(f"Candidate windows: {len(ranking_rows)}")
     print(f"Rankable windows: {summary['rankable_windows']}")
+    print(f"Comparison groups: {summary['comparison_group_count']}")
     print(f"Ranking CSV: {output_path}")
     print(f"Summary JSON: {summary_path}")
 
     if summary["best_ranked_window"]:
+        best = summary["best_ranked_window"]
+
         print(
             "Top candidate: "
-            + summary["best_ranked_window"]["window_label"]
+            f"{best['window_label']} "
+            f"(score: {best['exploratory_score']})"
         )
 
+    elif summary["best_ranked_windows_by_comparison_group"]:
+        print(
+            "Top candidates are available in separate comparison groups; "
+            "see the summary JSON."
+        )
+
+    else:
+        print("No candidate window met the ranking requirements.")
+
+    return summary
+
+
+# ---------------------------------------------------------
+# Command-line interface
+# ---------------------------------------------------------
 
 def parse_args():
 
     parser = argparse.ArgumentParser(
-        description="Rank candidate MEDA Sol periods."
+        description="Compare candidate MEDA Sol periods."
     )
 
     parser.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
@@ -1036,45 +1042,84 @@ def parse_args():
 
     parser.add_argument("--min-sol-fraction", type=float, default=0.5)
     parser.add_argument("--min-metrics", type=int, default=3)
-    parser.add_argument("--required-products", nargs="*", default=None)
+
+    parser.add_argument(
+        "--required-products",
+        nargs="*",
+        default=None,
+        help="Explicit product codes required for file availability scoring.",
+    )
 
     parser.add_argument("--weight-files", type=float, default=0.20)
     parser.add_argument("--weight-integrity", type=float, default=0.45)
-    parser.add_argument("--integrity-timestamps", type=float, default=1.0)
-    parser.add_argument("--integrity-values", type=float, default=1.0)
-    parser.add_argument("--integrity-continuity", type=float, default=1.0)
     parser.add_argument("--weight-quality", type=float, default=0.15)
     parser.add_argument("--weight-sync", type=float, default=0.20)
 
+    parser.add_argument("--integrity-timestamps", type=float, default=1.0)
+    parser.add_argument("--integrity-values", type=float, default=1.0)
+
     args = parser.parse_args()
 
+    if args.start_sol < 0 or args.end_sol < 0:
+        parser.error("Sol numbers cannot be negative.")
+
     if args.start_sol > args.end_sol:
-        parser.error("start-sol cannot exceed end-sol.")
+        parser.error("Start Sol cannot exceed End Sol.")
 
     if args.window_size < 1:
-        parser.error("window-size must be at least 1.")
+        parser.error("Window size must be at least 1.")
 
-    weights = [
+    if not math.isfinite(args.min_sol_fraction):
+        parser.error("min-sol-fraction must be finite.")
+
+    if not 0 < args.min_sol_fraction <= 1:
+        parser.error("min-sol-fraction must be greater than 0 and at most 1.")
+
+    if not 1 <= args.min_metrics <= len(METRIC_NAMES):
+        parser.error(
+            f"min-metrics must be between 1 and {len(METRIC_NAMES)}."
+        )
+
+    weight_values = [
         args.weight_files,
         args.weight_integrity,
         args.weight_quality,
         args.weight_sync,
-    ]
-
-    weights += [
         args.integrity_timestamps,
         args.integrity_values,
-        args.integrity_continuity,
     ]
 
-    if any(weight < 0 for weight in weights):
-        parser.error("Ranking weights cannot be negative.")
+    if any(
+        not math.isfinite(value) or value < 0
+        for value in weight_values
+    ):
+        parser.error("All weights must be finite and non-negative.")
 
-    if sum(weights) <= 0:
+    if sum(weight_values[:4]) <= 0:
         parser.error("At least one ranking weight must be positive.")
+
+    if sum(weight_values[4:]) <= 0:
+        parser.error("At least one integrity component weight must be positive.")
+
+    if args.required_products is not None:
+        products = [
+            product.strip()
+            for product in args.required_products
+            if product.strip()
+        ]
+
+        if not products:
+            parser.error(
+                "--required-products requires at least one product code."
+            )
+
+        args.required_products = products
 
     return args
 
 
 if __name__ == "__main__":
-    run(parse_args())
+    try:
+        run(parse_args())
+    except (OSError, ValueError, csv.Error, json.JSONDecodeError) as error:
+        raise SystemExit(f"ERROR: {error}")
