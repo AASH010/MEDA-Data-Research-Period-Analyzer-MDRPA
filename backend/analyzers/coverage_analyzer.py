@@ -1,17 +1,30 @@
-
 from __future__ import annotations
 
 import argparse
 import csv
 import json
 import math
-import re
 import statistics
 
 from collections import defaultdict
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
+
+try:
+    from .file_discovery import (
+        SOL_FOLDER_PATTERN as SOL_PATTERN,
+        PRODUCT_PATTERN,
+        get_sol_number as _shared_get_sol_number,
+        get_product_code as _shared_get_product_code,
+    )
+except ImportError:
+    from file_discovery import (
+        SOL_FOLDER_PATTERN as SOL_PATTERN,
+        PRODUCT_PATTERN,
+        get_sol_number as _shared_get_sol_number,
+        get_product_code as _shared_get_product_code,
+    )
 
 try:
     from .meda_common import (
@@ -34,13 +47,6 @@ except ImportError:
         pick_time_column,
     )
 
-
-SOL_PATTERN = re.compile(r"^sol[_-]?0*(\d+)$", re.IGNORECASE)
-
-PRODUCT_PATTERN = re.compile(
-    r"(?:^|_)CAL_([A-Z0-9]+)(?:_|\.|$)",
-    re.IGNORECASE,
-)
 
 REPORT_COLUMNS = [
     "sol_number",
@@ -77,13 +83,13 @@ REPORT_COLUMNS = [
 # --------------------------------------------------
 
 def get_sol_number(folder_name: str) -> int | None:
-    match = SOL_PATTERN.match(str(folder_name))
-    return int(match.group(1)) if match else None
+    """Preserve the public helper while reusing file_discovery."""
+    return _shared_get_sol_number(folder_name)
 
 
 def get_product_code(filename: str) -> str | None:
-    match = PRODUCT_PATTERN.search(str(filename))
-    return match.group(1).upper() if match else None
+    """Preserve the public helper while reusing file_discovery."""
+    return _shared_get_product_code(filename)
 
 
 def normalize_name(value: str) -> str:
@@ -93,17 +99,29 @@ def normalize_name(value: str) -> str:
 def safe_int(value, default=0) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def safe_float(value) -> float | None:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
     return number if math.isfinite(number) else None
+
+
+def _normalize_relative_path(value) -> str:
+    """Normalize a relative path for platform-independent matching."""
+    if value is None:
+        return ""
+
+    return (
+        str(value)
+        .replace("\\", "/")
+        .casefold()
+    )
 
 
 # --------------------------------------------------
@@ -152,11 +170,13 @@ def load_metadata_inventory(path: Path) -> dict:
 
 def build_metadata_index(metadata: dict) -> dict:
     """
-    Index XML records by Sol and filename.
+    Index XML records by relative path and by Sol/filename.
 
-    Filename matching is retained for compatibility with the
-    current inventory format. Relative paths are also indexed
-    when available.
+    source_relative_path is the current XML parser field.
+    relative_path remains supported for backward compatibility.
+
+    When both path fields contain the same normalized path,
+    the same record is indexed only once for that path.
     """
 
     index = defaultdict(list)
@@ -173,14 +193,23 @@ def build_metadata_index(metadata: dict) -> dict:
         if sol and source_file:
             index[("name", sol, source_file)].append(record)
 
-        relative_path = record.get("relative_path")
+        indexed_paths = set()
 
-        if relative_path:
-            normalized_path = (
-                str(relative_path)
-                .replace("\\", "/")
-                .casefold()
+        for path_field in (
+            "source_relative_path",
+            "relative_path",
+        ):
+            normalized_path = _normalize_relative_path(
+                record.get(path_field)
             )
+
+            if not normalized_path:
+                continue
+
+            if normalized_path in indexed_paths:
+                continue
+
+            indexed_paths.add(normalized_path)
 
             index[("path", normalized_path)].append(record)
 
@@ -191,7 +220,38 @@ def find_xml_record(
     csv_record: dict,
     metadata_index: dict,
 ) -> dict | None:
-    """Find an unambiguous XML record for one CSV inventory record."""
+    """
+    Find an unambiguous XML record for one CSV inventory record.
+
+    Matching order:
+        1. Relative-path matching.
+        2. Unique Sol/filename fallback.
+
+    Ambiguous matches are rejected instead of selecting an
+    arbitrary XML record.
+    """
+
+    relative_path = csv_record.get("relative_path")
+
+    if relative_path:
+        normalized_csv_path = _normalize_relative_path(
+            relative_path
+        )
+
+        xml_relative_path = _normalize_relative_path(
+            Path(normalized_csv_path).with_suffix(".xml")
+        )
+
+        path_matches = metadata_index.get(
+            ("path", xml_relative_path),
+            [],
+        )
+
+        if len(path_matches) == 1:
+            return path_matches[0]
+
+        if len(path_matches) > 1:
+            return None
 
     sol = str(
         csv_record.get("sol_folder") or ""
@@ -200,6 +260,9 @@ def find_xml_record(
     filename = str(
         csv_record.get("filename") or ""
     )
+
+    if not sol or not filename:
+        return None
 
     xml_name = Path(filename).stem + ".xml"
 
@@ -210,32 +273,6 @@ def find_xml_record(
 
     if len(matches) == 1:
         return matches[0]
-
-    if len(matches) > 1:
-        return None
-
-    relative_path = csv_record.get("relative_path")
-
-    if relative_path:
-        relative = Path(str(relative_path))
-
-        xml_relative = str(
-            relative.with_suffix(".xml")
-        )
-
-        xml_relative = (
-            xml_relative
-            .replace("\\", "/")
-            .casefold()
-        )
-
-        matches = metadata_index.get(
-            ("path", xml_relative),
-            [],
-        )
-
-        if len(matches) == 1:
-            return matches[0]
 
     return None
 
@@ -447,7 +484,6 @@ def build_column_mapping(
         )
 
     # Strictly validated WS header aliases.
-    #
     # These aliases are based on the observed WS files.
     # Only positions 15 and 16 may differ.
     # All other fields and the total column count must match.
