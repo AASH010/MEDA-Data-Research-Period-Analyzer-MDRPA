@@ -1,3 +1,4 @@
+
 """Tests for run status rules and the in-memory run registry."""
 
 import pytest
@@ -202,6 +203,76 @@ def test_register_rejects_mismatched_run_ids(registry, tmp_path):
 
     with pytest.raises(ValueError, match="must match"):
         registry.register(paths, metadata)
+
+    assert len(registry) == 0
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        RunStatus.PENDING,
+        RunStatus.RUNNING,
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    ],
+)
+def test_register_restores_status_from_metadata(
+    registry,
+    tmp_path,
+    status,
+):
+    run_id = f"restored-{status.value.lower()}"
+
+    paths = RunPaths.create(run_id, tmp_path)
+    metadata = RunMetadata(
+        run_id=run_id,
+        status=status,
+    )
+
+    record = registry.register(paths, metadata)
+
+    assert record.status is status
+    assert registry.get(run_id).status is status
+
+
+def test_register_explicit_status_overrides_metadata_status(
+    registry,
+    tmp_path,
+):
+    run_id = "explicit-status-run"
+
+    paths = RunPaths.create(run_id, tmp_path)
+    metadata = RunMetadata(
+        run_id=run_id,
+        status=RunStatus.RUNNING,
+    )
+
+    record = registry.register(
+        paths,
+        metadata,
+        status=RunStatus.FAILED,
+    )
+
+    assert record.status is RunStatus.FAILED
+    assert metadata.status == RunStatus.RUNNING.value
+
+
+def test_register_rejects_invalid_explicit_status(
+    registry,
+    tmp_path,
+):
+    run_id = "invalid-status-run"
+
+    paths = RunPaths.create(run_id, tmp_path)
+    metadata = RunMetadata(run_id=run_id)
+
+    with pytest.raises(TypeError, match="status must be"):
+        registry.register(
+            paths,
+            metadata,
+            status="RUNNING",
+        )
 
     assert len(registry) == 0
 
