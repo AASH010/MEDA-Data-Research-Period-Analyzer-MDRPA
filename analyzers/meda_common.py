@@ -1,11 +1,18 @@
 
-"""Shared helpers for MEDA time axes and XML-driven CSV columns.
+"""Shared helpers for MEDA time axes, XML-driven CSV columns,
+and structural XML field-metadata validation.
 
 Time handling is deliberately conservative:
 - SCLK is parsed as a finite numeric coordinate, not converted to UTC.
 - UTC ISO-8601 values are normalized to Unix seconds only when timezone-aware.
 - LMST is represented on a linear Mars-sol coordinate.
 - LTST is a nominal local-clock coordinate, not a precise elapsed-time scale.
+
+Metadata validation is structural only:
+- It detects missing or duplicated field names.
+- It detects missing, invalid, or duplicated field numbers.
+- It reports missing data types.
+- It does not infer scientific meanings or silently repair source metadata.
 
 Important:
 Parsing a time value does not prove that its scientific interpretation
@@ -17,6 +24,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -308,6 +316,152 @@ def ordered_fields(fields: list[dict]) -> list[dict]:
             key=sort_key,
         )
     ]
+
+
+def validate_field_metadata(fields: list[dict]) -> list[dict]:
+    """Return structural warnings for XML field metadata.
+
+    Each warning contains:
+        code: Stable machine-readable warning code.
+        severity: "warning" or "error".
+        field_index: Zero-based position in the original fields list.
+        field_name: Original field name, if available.
+        message: Human-readable explanation.
+
+    This function does not modify fields and does not determine
+    scientific validity or interpret flag semantics.
+
+    Duplicate names are compared after norm() normalization.
+    Field numbers must be positive integers and unique when present.
+    Missing field numbers are warnings because document order may
+    still be retained by ordered_fields().
+    """
+    if not isinstance(fields, list):
+        return [{
+            "code": "fields_not_a_list",
+            "severity": "error",
+            "field_index": None,
+            "field_name": "",
+            "message": "XML field metadata must be provided as a list.",
+        }]
+
+    warnings = []
+    names_by_key = defaultdict(list)
+    numbers_by_value = defaultdict(list)
+
+    for index, field in enumerate(fields):
+        if not isinstance(field, dict):
+            warnings.append({
+                "code": "field_entry_not_an_object",
+                "severity": "error",
+                "field_index": index,
+                "field_name": "",
+                "message": "Field metadata entry is not an object.",
+            })
+            continue
+
+        raw_name = field.get("name")
+        field_name = str(raw_name).strip() if raw_name is not None else ""
+
+        if not field_name:
+            warnings.append({
+                "code": "missing_field_name",
+                "severity": "error",
+                "field_index": index,
+                "field_name": "",
+                "message": "Field definition has no usable name.",
+            })
+        else:
+            names_by_key[norm(field_name)].append((index, field_name))
+
+        raw_number = field.get("field_number")
+
+        if raw_number is None or str(raw_number).strip() == "":
+            warnings.append({
+                "code": "missing_field_number",
+                "severity": "warning",
+                "field_index": index,
+                "field_name": field_name,
+                "message": (
+                    "Field number is missing; document order "
+                    "will be preserved as a fallback."
+                ),
+            })
+        else:
+            try:
+                number = int(str(raw_number).strip())
+
+                # Reject values such as "2.5" rather than truncating.
+                if str(raw_number).strip() not in {
+                    str(number),
+                    f"+{number}",
+                }:
+                    raise ValueError
+
+                if number < 1:
+                    raise ValueError
+
+                numbers_by_value[number].append((index, field_name))
+
+            except (TypeError, ValueError, OverflowError):
+                warnings.append({
+                    "code": "invalid_field_number",
+                    "severity": "error",
+                    "field_index": index,
+                    "field_name": field_name,
+                    "message": (
+                        f"Field number {raw_number!r} is not "
+                        "a positive integer."
+                    ),
+                })
+
+        data_type = field.get("data_type")
+
+        if data_type is None or not str(data_type).strip():
+            warnings.append({
+                "code": "missing_data_type",
+                "severity": "warning",
+                "field_index": index,
+                "field_name": field_name,
+                "message": "Field definition has no data type.",
+            })
+
+    # Report every member of a duplicate-name group.
+    for entries in names_by_key.values():
+        if len(entries) > 1:
+            duplicate_names = ", ".join(
+                f"{name!r} (field index {index})"
+                for index, name in entries
+            )
+
+            for index, name in entries:
+                warnings.append({
+                    "code": "duplicate_field_name",
+                    "severity": "error",
+                    "field_index": index,
+                    "field_name": name,
+                    "message": (
+                        "Field name is duplicated after normalization: "
+                        f"{duplicate_names}."
+                    ),
+                })
+
+    # Report every member of a duplicate field-number group.
+    for number, entries in numbers_by_value.items():
+        if len(entries) > 1:
+            for index, name in entries:
+                warnings.append({
+                    "code": "duplicate_field_number",
+                    "severity": "error",
+                    "field_index": index,
+                    "field_name": name,
+                    "message": (
+                        f"Field number {number} is assigned to "
+                        f"{len(entries)} field definitions."
+                    ),
+                })
+
+    return warnings
 
 
 def pick_time_column(

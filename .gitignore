@@ -31,3 +31,6 @@ input/*
 # Temporary files
 *.tmp
 *.bak
+# Test input and output directories
+/input_test/
+/output_test/
