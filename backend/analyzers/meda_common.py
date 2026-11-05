@@ -1,23 +1,22 @@
+"""Shared utilities used by the MEDA backend analyzers.
 
-"""Shared helpers for MEDA time axes, XML-driven CSV columns,
-and structural XML field-metadata validation.
+This module provides shared time-axis parsing, XML field ordering,
+field metadata validation, and numeric-column discovery.
+
+It is a utility module, not an independent pipeline stage:
+- It does not discover or open input files.
+- It does not write reports.
+- It does not define project input/output paths.
+- It does not execute analyzers or orchestrate the pipeline.
 
 Time handling is deliberately conservative:
-- SCLK is parsed as a finite numeric coordinate, not converted to UTC.
-- UTC ISO-8601 values are normalized to Unix seconds only when timezone-aware.
-- LMST is represented on a linear Mars-sol coordinate.
-- LTST is a nominal local-clock coordinate, not a precise elapsed-time scale.
+- SCLK is a numeric coordinate, not UTC.
+- UTC ISO-8601 values require timezone information.
+- LMST is represented as a linear Mars-sol coordinate.
+- LTST is a nominal local-clock coordinate, not precise elapsed SI time.
 
-Metadata validation is structural only:
-- It detects missing or duplicated field names.
-- It detects missing, invalid, or duplicated field numbers.
-- It reports missing data types.
-- It does not infer scientific meanings or silently repair source metadata.
-
-Important:
-Parsing a time value does not prove that its scientific interpretation
-or conversion is valid. Callers must report the selected time axis and
-the number of values that failed parsing.
+Metadata validation is structural only. It does not determine
+scientific validity or interpret quality-flag semantics.
 """
 
 from __future__ import annotations
@@ -30,10 +29,12 @@ from typing import Optional
 
 
 # Mean Mars solar day in Earth seconds.
-# Used as a coordinate scale for LMST, never as an Earth UTC conversion.
+# Used only as a coordinate scale for LMST/LTST.
 SOL_SECONDS = 88775.244
 
-MISSING_TEXT = {
+# Shared by coverage, synchronization, and quality analyzers.
+# Immutable to prevent accidental modification by a consumer.
+MISSING_TEXT = frozenset({
     "",
     "na",
     "n/a",
@@ -41,7 +42,7 @@ MISSING_TEXT = {
     "null",
     "none",
     "missing",
-}
+})
 
 LMST_RE = re.compile(
     r"^(?:SOL[-_ ]*)?(\d+)M(\d{1,2}):(\d{2}):(\d{2}(?:\.\d+)?)$",
@@ -61,10 +62,13 @@ NUMERIC_TYPE_RE = re.compile(
 
 def norm(value) -> str:
     """Normalize a field or column name for comparisons."""
+    if value is None:
+        value = ""
+
     return re.sub(
         r"[^a-z0-9]",
         "",
-        str(value or "").lower(),
+        str(value).lower(),
     )
 
 
@@ -75,10 +79,7 @@ def _finite_float(value) -> Optional[float]:
     except (TypeError, ValueError, OverflowError):
         return None
 
-    if not math.isfinite(number):
-        return None
-
-    return number
+    return number if math.isfinite(number) else None
 
 
 def parse_sclk(text: str) -> Optional[float]:
@@ -113,24 +114,28 @@ def _parse_sol_clock(match) -> Optional[float]:
     if not math.isfinite(second) or not 0 <= second < 60:
         return None
 
-    return (
-        sol * SOL_SECONDS
-        + hour * (SOL_SECONDS / 24.0)
-        + minute * (SOL_SECONDS / 1440.0)
-        + second * (SOL_SECONDS / 86400.0)
-    )
+    try:
+        coordinate = (
+            sol * SOL_SECONDS
+            + hour * (SOL_SECONDS / 24.0)
+            + minute * (SOL_SECONDS / 1440.0)
+            + second * (SOL_SECONDS / 86400.0)
+        )
+    except (OverflowError, ValueError):
+        return None
+
+    if not math.isfinite(coordinate):
+        return None
+
+    return coordinate
 
 
 def parse_lmst(text: str) -> Optional[float]:
-    """Parse LMST into a linear Mars-sol coordinate.
-
-    This is not a conversion to UTC.
-    """
+    """Parse LMST into a linear Mars-sol coordinate, not UTC."""
     if text is None:
         return None
 
     match = LMST_RE.fullmatch(str(text).strip())
-
     return _parse_sol_clock(match)
 
 
@@ -147,7 +152,6 @@ def parse_ltst(text: str) -> Optional[float]:
         return None
 
     match = LTST_RE.fullmatch(str(text).strip())
-
     return _parse_sol_clock(match)
 
 
@@ -163,7 +167,7 @@ def parse_iso(
     If want_aware=False:
         Only timezone-naive values are accepted.
 
-    Naive timestamps are not silently assumed to be UTC.
+    Naive timestamps are never silently assumed to be UTC.
     """
     if text is None:
         return None
@@ -193,7 +197,7 @@ def parse_iso(
         if is_aware:
             return parsed.astimezone(timezone.utc).timestamp()
 
-        # Keep naive values separate from UTC timestamps.
+        # Naive timestamps remain a separate coordinate.
         return (
             parsed - datetime(1970, 1, 1)
         ).total_seconds()
@@ -226,7 +230,6 @@ PARSERS = {
     ),
 }
 
-
 DEFAULT_AXIS_PREFERENCE = (
     "sclk",
     "utc",
@@ -240,7 +243,6 @@ def column_time_kind(name: str) -> Optional[str]:
     """Identify a supported time axis from a field/column name."""
     normalized = norm(name)
 
-    # Spacecraft clock
     if (
         normalized == "sclk"
         or normalized.startswith("sclk")
@@ -248,11 +250,9 @@ def column_time_kind(name: str) -> Optional[str]:
     ):
         return "sclk"
 
-    # UTC
     if "utc" in normalized:
         return "utc"
 
-    # Local Mean Solar Time
     if normalized in {
         "lmst",
         "localmeansolartime",
@@ -261,7 +261,6 @@ def column_time_kind(name: str) -> Optional[str]:
     }:
         return "lmst"
 
-    # Local True Solar Time
     if normalized in {
         "ltst",
         "localtruesolartime",
@@ -273,11 +272,51 @@ def column_time_kind(name: str) -> Optional[str]:
     return None
 
 
-def ordered_fields(fields: list[dict]) -> list[dict]:
-    """Order XML field definitions by field_number.
+def _positive_field_number(value) -> Optional[int]:
+    """Return a canonical positive integer field number, if valid.
 
-    If field_number is missing or invalid, preserve document order
-    for those fields.
+    Accepted examples:
+        1
+        "1"
+        "+1"
+
+    Rejected examples:
+        0
+        "-1"
+        "01"
+        "1.0"
+        "2.5"
+        "invalid"
+    """
+    if value is None:
+        return None
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    try:
+        number = int(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    if number < 1:
+        return None
+
+    if text not in {str(number), f"+{number}"}:
+        return None
+
+    return number
+
+
+def ordered_fields(fields: list[dict]) -> list[dict]:
+    """Order XML fields by valid field_number.
+
+    Fields with missing or invalid numbers retain their relative
+    document order and follow fields with valid numbers.
+
+    Non-dictionary entries are ignored. The input is not modified.
     """
     if not isinstance(fields, list):
         return []
@@ -288,33 +327,22 @@ def ordered_fields(fields: list[dict]) -> list[dict]:
         if isinstance(field, dict)
     ]
 
+    indexed = list(enumerate(valid_fields))
+
     def sort_key(item):
         original_index, field = item
+        field_number = _positive_field_number(
+            field.get("field_number")
+        )
 
-        try:
-            field_number = int(field.get("field_number"))
+        if field_number is None:
+            return 1, original_index, original_index
 
-            return (
-                0,
-                field_number,
-                original_index,
-            )
-
-        except (TypeError, ValueError, OverflowError):
-            return (
-                1,
-                original_index,
-                original_index,
-            )
-
-    indexed = list(enumerate(valid_fields))
+        return 0, field_number, original_index
 
     return [
         field
-        for _, field in sorted(
-            indexed,
-            key=sort_key,
-        )
+        for _, field in sorted(indexed, key=sort_key)
     ]
 
 
@@ -328,13 +356,12 @@ def validate_field_metadata(fields: list[dict]) -> list[dict]:
         field_name: Original field name, if available.
         message: Human-readable explanation.
 
-    This function does not modify fields and does not determine
-    scientific validity or interpret flag semantics.
-
     Duplicate names are compared after norm() normalization.
-    Field numbers must be positive integers and unique when present.
-    Missing field numbers are warnings because document order may
-    still be retained by ordered_fields().
+    Field numbers must be positive canonical integers and unique
+    when present. Missing field numbers are warnings because
+    ordered_fields() retains document order as a fallback.
+
+    This function does not modify the supplied metadata.
     """
     if not isinstance(fields, list):
         return [{
@@ -361,7 +388,11 @@ def validate_field_metadata(fields: list[dict]) -> list[dict]:
             continue
 
         raw_name = field.get("name")
-        field_name = str(raw_name).strip() if raw_name is not None else ""
+        field_name = (
+            str(raw_name).strip()
+            if raw_name is not None
+            else ""
+        )
 
         if not field_name:
             warnings.append({
@@ -372,7 +403,9 @@ def validate_field_metadata(fields: list[dict]) -> list[dict]:
                 "message": "Field definition has no usable name.",
             })
         else:
-            names_by_key[norm(field_name)].append((index, field_name))
+            names_by_key[norm(field_name)].append(
+                (index, field_name)
+            )
 
         raw_number = field.get("field_number")
 
@@ -388,22 +421,9 @@ def validate_field_metadata(fields: list[dict]) -> list[dict]:
                 ),
             })
         else:
-            try:
-                number = int(str(raw_number).strip())
+            number = _positive_field_number(raw_number)
 
-                # Reject values such as "2.5" rather than truncating.
-                if str(raw_number).strip() not in {
-                    str(number),
-                    f"+{number}",
-                }:
-                    raise ValueError
-
-                if number < 1:
-                    raise ValueError
-
-                numbers_by_value[number].append((index, field_name))
-
-            except (TypeError, ValueError, OverflowError):
+            if number is None:
                 warnings.append({
                     "code": "invalid_field_number",
                     "severity": "error",
@@ -411,9 +431,13 @@ def validate_field_metadata(fields: list[dict]) -> list[dict]:
                     "field_name": field_name,
                     "message": (
                         f"Field number {raw_number!r} is not "
-                        "a positive integer."
+                        "a positive canonical integer."
                     ),
                 })
+            else:
+                numbers_by_value[number].append(
+                    (index, field_name)
+                )
 
         data_type = field.get("data_type")
 
@@ -426,7 +450,7 @@ def validate_field_metadata(fields: list[dict]) -> list[dict]:
                 "message": "Field definition has no data type.",
             })
 
-    # Report every member of a duplicate-name group.
+    # Report every member of each duplicate-name group.
     for entries in names_by_key.values():
         if len(entries) > 1:
             duplicate_names = ", ".join(
@@ -446,7 +470,7 @@ def validate_field_metadata(fields: list[dict]) -> list[dict]:
                     ),
                 })
 
-    # Report every member of a duplicate field-number group.
+    # Report every member of each duplicate field-number group.
     for number, entries in numbers_by_value.items():
         if len(entries) > 1:
             for index, name in entries:
@@ -470,56 +494,48 @@ def pick_time_column(
 ):
     """Return (column_index, column_name, kind).
 
-    Returns (None, None, None) when no supported time field is found.
+    The index refers to the ordered_fields() result, not the
+    original XML list position.
 
-    Important:
+    Returns (None, None, None) when no supported time field exists.
+
     This function performs metadata/name-based discovery only.
     It does not validate actual CSV values.
-
-    The caller must validate values with the selected parser and
-    report invalid or missing timestamps.
     """
     if not isinstance(fields, list):
         return None, None, None
 
     ordered = ordered_fields(fields)
-
     by_kind = {}
 
     for index, field in enumerate(ordered):
         name = field.get("name") or ""
-
         kind = column_time_kind(name)
 
         if kind and kind not in by_kind:
-            by_kind[kind] = (
-                index,
-                name,
-            )
+            by_kind[kind] = (index, name)
 
     for kind in preference:
         if kind in by_kind:
             index, name = by_kind[kind]
-
-            return (
-                index,
-                name,
-                kind,
-            )
+            return index, name, kind
 
     return None, None, None
 
 
 def numeric_column_indexes(
     fields: list[dict],
-    skip: set[int],
+    skip: set[int] | None = None,
 ) -> list[int]:
-    """Return XML-declared numeric columns, excluding time columns."""
+    """Return XML-declared numeric column indexes.
+
+    Indexes refer to ordered_fields(fields). Recognized time columns
+    are excluded even if their XML data_type is numeric.
+    """
     if not isinstance(fields, list):
         return []
 
     skip = skip or set()
-
     result = []
 
     for index, field in enumerate(ordered_fields(fields)):
@@ -528,13 +544,10 @@ def numeric_column_indexes(
 
         name = field.get("name") or ""
 
-        # Never treat recognized time axes as ordinary numeric data.
         if column_time_kind(name) is not None:
             continue
 
-        data_type = str(
-            field.get("data_type") or ""
-        )
+        data_type = str(field.get("data_type") or "")
 
         if NUMERIC_TYPE_RE.search(data_type):
             result.append(index)

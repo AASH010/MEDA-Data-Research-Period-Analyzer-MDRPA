@@ -1,10 +1,11 @@
-
 import copy
 
 import pytest
 
 from backend.analyzers.meda_common import (
     SOL_SECONDS,
+    MISSING_TEXT,
+    PARSERS,
     DEFAULT_AXIS_PREFERENCE,
     norm,
     parse_sclk,
@@ -20,7 +21,7 @@ from backend.analyzers.meda_common import (
 
 
 # ---------------------------------------------------------------------
-# Name normalization
+# Shared constants and normalization
 # ---------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -32,10 +33,45 @@ from backend.analyzers.meda_common import (
         ("Field-Number_01", "fieldnumber01"),
         ("", ""),
         (None, ""),
+        (0, "0"),
+        (False, "false"),
     ],
 )
 def test_norm(value, expected):
     assert norm(value) == expected
+
+
+def test_missing_text_is_immutable():
+    assert "" in MISSING_TEXT
+    assert "na" in MISSING_TEXT
+
+    with pytest.raises(AttributeError):
+        MISSING_TEXT.add("unknown")
+
+
+def test_parser_registry_contains_supported_time_kinds():
+    assert set(PARSERS) == {
+        "sclk",
+        "utc",
+        "lmst",
+        "ltst",
+        "iso_naive",
+    }
+
+    for parser, description in PARSERS.values():
+        assert callable(parser)
+        assert isinstance(description, str)
+        assert description
+
+
+def test_default_axis_preference_is_defined():
+    assert DEFAULT_AXIS_PREFERENCE == (
+        "sclk",
+        "utc",
+        "lmst",
+        "ltst",
+        "iso_naive",
+    )
 
 
 # ---------------------------------------------------------------------
@@ -106,6 +142,12 @@ def test_parse_lmst_sol_difference_uses_mars_sol_scale():
     assert second - first == pytest.approx(SOL_SECONDS)
 
 
+def test_parse_lmst_rejects_extremely_large_sol_without_overflow():
+    value = "9" * 400 + "M00:00:00"
+
+    assert parse_lmst(value) is None
+
+
 # ---------------------------------------------------------------------
 # LTST parsing
 # ---------------------------------------------------------------------
@@ -139,6 +181,12 @@ def test_parse_ltst_sol_difference_uses_nominal_sol_scale():
     assert first is not None
     assert second is not None
     assert second - first == pytest.approx(SOL_SECONDS)
+
+
+def test_parse_ltst_rejects_extremely_large_sol_without_overflow():
+    value = "9" * 400 + " 00:00:00"
+
+    assert parse_ltst(value) is None
 
 
 # ---------------------------------------------------------------------
@@ -243,6 +291,33 @@ def test_ordered_fields_preserves_document_order_for_invalid_numbers():
     ]
 
 
+@pytest.mark.parametrize(
+    "field_number",
+    [
+        "0",
+        "-1",
+        "01",
+        "1.0",
+        "2.5",
+        "invalid",
+    ],
+)
+def test_ordered_fields_treats_noncanonical_numbers_as_invalid(
+    field_number,
+):
+    fields = [
+        {"name": "INVALID", "field_number": field_number},
+        {"name": "VALID", "field_number": "2"},
+    ]
+
+    result = ordered_fields(fields)
+
+    assert [field["name"] for field in result] == [
+        "VALID",
+        "INVALID",
+    ]
+
+
 def test_ordered_fields_preserves_order_for_equal_numbers():
     fields = [
         {"name": "A", "field_number": "1"},
@@ -270,6 +345,19 @@ def test_ordered_fields_ignores_non_dictionary_entries():
 def test_ordered_fields_rejects_non_list_input():
     assert ordered_fields(None) == []
     assert ordered_fields({}) == []
+
+
+def test_ordered_fields_does_not_modify_input():
+    fields = [
+        {"name": "B", "field_number": "2"},
+        {"name": "A", "field_number": "1"},
+    ]
+
+    original = copy.deepcopy(fields)
+
+    ordered_fields(fields)
+
+    assert fields == original
 
 
 # ---------------------------------------------------------------------
@@ -327,6 +415,7 @@ def test_validate_field_metadata_detects_missing_field_number():
     [
         "0",
         "-1",
+        "01",
         "2.5",
         "invalid",
     ],
@@ -343,6 +432,21 @@ def test_validate_field_metadata_detects_invalid_field_number(
     ])
 
     assert any(
+        warning["code"] == "invalid_field_number"
+        for warning in warnings
+    )
+
+
+def test_validate_field_metadata_accepts_canonical_positive_number():
+    warnings = validate_field_metadata([
+        {
+            "name": "TEMP",
+            "field_number": "1",
+            "data_type": "real",
+        }
+    ])
+
+    assert not any(
         warning["code"] == "invalid_field_number"
         for warning in warnings
     )
@@ -479,14 +583,21 @@ def test_pick_time_column_rejects_non_list_input():
     assert pick_time_column(None) == (None, None, None)
 
 
-def test_default_axis_preference_is_defined():
-    assert DEFAULT_AXIS_PREFERENCE == (
-        "sclk",
-        "utc",
-        "lmst",
-        "ltst",
-        "iso_naive",
-    )
+def test_pick_time_column_index_matches_ordered_fields():
+    fields = [
+        {"name": "TEMP", "field_number": "3"},
+        {"name": "SCLK", "field_number": "1"},
+        {"name": "UTC_TIME", "field_number": "2"},
+    ]
+
+    index, name, kind = pick_time_column(fields)
+
+    ordered = ordered_fields(fields)
+
+    assert index == 0
+    assert ordered[index]["name"] == name
+    assert name == "SCLK"
+    assert kind == "sclk"
 
 
 # ---------------------------------------------------------------------
@@ -537,5 +648,41 @@ def test_numeric_column_indexes_respects_skip_indexes():
     assert numeric_column_indexes(fields, {0}) == [1]
 
 
+def test_numeric_column_indexes_uses_ordered_field_indexes():
+    fields = [
+        {
+            "name": "PRESSURE",
+            "field_number": "2",
+            "data_type": "real",
+        },
+        {
+            "name": "TEMP",
+            "field_number": "1",
+            "data_type": "real",
+        },
+    ]
+
+    assert numeric_column_indexes(fields) == [0, 1]
+
+    ordered = ordered_fields(fields)
+
+    assert [field["name"] for field in ordered] == [
+        "TEMP",
+        "PRESSURE",
+    ]
+
+
 def test_numeric_column_indexes_returns_empty_for_non_list_input():
     assert numeric_column_indexes(None, set()) == []
+
+
+def test_numeric_column_indexes_supports_omitted_skip_argument():
+    fields = [
+        {
+            "name": "TEMP",
+            "field_number": "1",
+            "data_type": "real",
+        },
+    ]
+
+    assert numeric_column_indexes(fields) == [0]
