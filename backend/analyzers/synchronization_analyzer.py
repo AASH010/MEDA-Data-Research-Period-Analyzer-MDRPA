@@ -5,13 +5,14 @@ import argparse
 import csv
 import json
 import math
+import os
 import re
 import statistics
 
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from itertools import chain, combinations
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 try:
@@ -131,8 +132,51 @@ def get_sol_number(value: Any) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def portable_path(value: Any) -> str:
+    """
+    Normalize Windows and POSIX separators.
+
+    This does not change path case because filesystem path
+    identity and metadata matching have different requirements.
+    """
+    return str(value or "").strip().replace("\\", "/")
+
+
 def normalize_path(value: Any) -> str:
-    return str(value or "").replace("\\", "/").casefold()
+    """
+    Normalize separators and case for metadata path matching.
+
+    Metadata path matching remains case-insensitive, preserving
+    the analyzer's existing matching behavior.
+    """
+    return portable_path(value).casefold()
+
+
+def portable_stem(value: Any) -> str:
+    """
+    Extract a filename stem consistently across Windows and POSIX.
+
+    pathlib.Path on POSIX does not treat backslashes as separators.
+    PurePosixPath works after portable separator normalization.
+    """
+    return PurePosixPath(
+        portable_path(value)
+    ).stem.casefold()
+
+
+def file_identity(path: Path) -> str:
+    """
+    Return a normalized identity for an existing file path.
+
+    os.path.normcase applies the host platform's path normalization:
+    - Windows: case-insensitive path normalization.
+    - POSIX: preserves case-sensitive path distinctions.
+
+    resolve() also normalizes relative path components and symlinks.
+    """
+    return os.path.normcase(
+        str(path.resolve())
+    )
 
 
 def is_missing(value: Any) -> bool:
@@ -246,7 +290,7 @@ def build_metadata_index(records: list[dict]) -> dict:
         if not source_file:
             continue
 
-        stem = Path(source_file).stem.casefold()
+        stem = portable_stem(source_file)
         sol_number = metadata_sol_number(record)
 
         if sol_number is not None:
@@ -280,7 +324,7 @@ def find_metadata_record(
     if not filename:
         return None, "missing_inventory_filename"
 
-    stem = Path(filename).stem.casefold()
+    stem = portable_stem(filename)
 
     # Priority 1: exact relative path.
     relative_path = get_inventory_relative_path(
@@ -288,7 +332,9 @@ def find_metadata_record(
     )
 
     if relative_path:
-        csv_relative = Path(relative_path)
+        csv_relative = PurePosixPath(
+            portable_path(relative_path)
+        )
 
         xml_relative = normalize_path(
             csv_relative.with_suffix(".xml")
@@ -348,29 +394,35 @@ def resolve_csv_path(
     inventory_row: dict,
 ) -> Path | None:
 
-    filename = str(
-        inventory_row.get("filename") or ""
-    ).strip()
+    filename = portable_path(
+        inventory_row.get("filename")
+    )
 
     if not filename:
         return None
+
+    # Inventory filename should identify the file itself,
+    # even if an older inventory contains a Windows-style path.
+    filename = PurePosixPath(filename).name
 
     relative_path = get_inventory_relative_path(
         inventory_row
     )
 
     if relative_path:
-        candidate = input_root / Path(relative_path)
+        candidate = input_root / Path(
+            portable_path(relative_path)
+        )
 
         if candidate.is_file():
             return candidate
 
-    sol_folder = str(
-        inventory_row.get("sol_folder") or ""
-    ).strip()
+    sol_folder = portable_path(
+        inventory_row.get("sol_folder")
+    )
 
     if sol_folder:
-        sol_directory = input_root / sol_folder
+        sol_directory = input_root / Path(sol_folder)
 
         direct = sol_directory / filename
 
@@ -900,10 +952,13 @@ def match_one_to_one(
     tolerance: float,
 ) -> tuple[int, list[float]]:
     """
-    Match sorted timestamp occurrences one-to-one.
+    Match timestamp occurrences one-to-one.
 
     Each timestamp occurrence can participate in at most
     one match. Duplicate timestamps remain separate observations.
+
+    Inputs are sorted locally to make this public function safe
+    when called directly with unsorted timestamp lists.
 
     The two-pointer strategy produces a maximum-cardinality
     matching for sorted one-dimensional values under a fixed
@@ -914,6 +969,9 @@ def match_one_to_one(
         raise ValueError(
             "Tolerance must be finite and non-negative."
         )
+
+    first = sorted(first)
+    second = sorted(second)
 
     i = 0
     j = 0
@@ -986,6 +1044,11 @@ def compare_timestamp_series(
         result["comparison_status"] = "empty_series"
         result["notes"] = "At least one timestamp series is empty."
         return result
+
+    # Public callers may provide unsorted lists.
+    # Sort copies, retaining every duplicate occurrence.
+    first = sorted(first)
+    second = sorted(second)
 
     overlap_start = max(first[0], second[0])
     overlap_end = min(first[-1], second[-1])
@@ -1138,9 +1201,7 @@ def run_analysis(
             )
             continue
 
-        resolved_path = str(
-            csv_path.resolve()
-        ).casefold()
+        resolved_path = file_identity(csv_path)
 
         if resolved_path in processed_paths:
             continue
