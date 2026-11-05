@@ -11,170 +11,238 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from meda_common import (
-    DEFAULT_AXIS_PREFERENCE,
-    MISSING_TEXT,
-    PARSERS,
-    norm,
-    numeric_column_indexes,
-    ordered_fields,
-    pick_time_column,
-)
+try:
+    from .meda_common import (
+        DEFAULT_AXIS_PREFERENCE,
+        MISSING_TEXT,
+        PARSERS,
+        norm,
+        numeric_column_indexes,
+        ordered_fields,
+        pick_time_column,
+    )
+except ImportError:
+    from meda_common import (
+        DEFAULT_AXIS_PREFERENCE,
+        MISSING_TEXT,
+        PARSERS,
+        norm,
+        numeric_column_indexes,
+        ordered_fields,
+        pick_time_column,
+    )
 
 
-SOL_PATTERN = re.compile(
-    r"^sol[_-]?0*(\d+)$",
-    re.IGNORECASE,
-)
+
+SOL_PATTERN = re.compile(r"^sol[_-]?0*(\d+)$", re.IGNORECASE)
 
 PRODUCT_PATTERN = re.compile(
     r"(?:^|_)CAL_([A-Z0-9]+)(?:_|\.|$)",
     re.IGNORECASE,
 )
 
-TIME_KEYWORDS = re.compile(
-    r"\b(time|date|utc|ltst|lmst|timestamp)\b",
-    re.IGNORECASE,
-)
-
 REPORT_COLUMNS = [
-    "sol_number", "sol_folder", "product_code", "filename",
-    "file_size_bytes", "row_count", "time_field", "time_kind",
-    "first_time", "last_time", "span_seconds",
-    "parsed_timestamp_count", "missing_timestamp_count",
-    "invalid_timestamp_count", "duplicate_timestamp_count",
-    "out_of_order_count", "median_step_seconds", "gap_count",
-    "largest_gap_seconds", "gap_total_seconds", "numeric_value_count",
-    "numeric_missing_count", "numeric_invalid_count",
-    "measurement_coverage_status", "notes",
+    "sol_number",
+    "sol_folder",
+    "product_code",
+    "filename",
+    "file_size_bytes",
+    "row_count",
+    "time_field",
+    "time_kind",
+    "first_time",
+    "last_time",
+    "span_seconds",
+    "parsed_timestamp_count",
+    "missing_timestamp_count",
+    "invalid_timestamp_count",
+    "duplicate_timestamp_count",
+    "out_of_order_count",
+    "median_step_seconds",
+    "gap_count",
+    "largest_gap_seconds",
+    "gap_total_seconds",
+    "numeric_value_count",
+    "numeric_missing_count",
+    "numeric_invalid_count",
+    "measurement_coverage_status",
+    "column_mapping_status",
+    "notes",
 ]
 
 
 # --------------------------------------------------
-# Basic Helpers
+# Identification helpers
 # --------------------------------------------------
 
 def get_sol_number(folder_name: str) -> int | None:
-    match = SOL_PATTERN.match(folder_name)
-
+    match = SOL_PATTERN.match(str(folder_name))
     return int(match.group(1)) if match else None
 
 
 def get_product_code(filename: str) -> str | None:
-    match = PRODUCT_PATTERN.search(filename)
-
+    match = PRODUCT_PATTERN.search(str(filename))
     return match.group(1).upper() if match else None
 
 
 def normalize_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", value.lower())
+    return norm(value)
 
 
-def parse_timestamp(value: str | None) -> datetime | None:
-    """
-    Parse common ISO-style timestamps.
-
-    Numeric mission-specific time values are not interpreted
-    without an explicit time-system definition.
-    """
-
-    if not value:
-        return None
-
-    value = value.strip()
-
-    if not value:
-        return None
-
+def safe_int(value, default=0) -> int:
     try:
-        normalized = value.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized)
-
-    except ValueError:
-        pass
-
-    formats = [
-        "%Y-%m-%d %H:%M:%S.%f",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S.%f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d",
-    ]
-
-    for fmt in formats:
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-
-    return None
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
-def format_timestamp(value: datetime | None) -> str:
-    if value is None:
-        return ""
+def safe_float(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
 
-    return value.isoformat()
+    return number if math.isfinite(number) else None
 
 
 # --------------------------------------------------
-# Load Previous Stage Outputs
+# Load previous stage reports
 # --------------------------------------------------
 
 def load_file_inventory(path: Path) -> list[dict]:
-
     if not path.exists():
-        raise FileNotFoundError(
-            f"File inventory not found: {path}"
-        )
+        raise FileNotFoundError(f"File inventory not found: {path}")
 
     with path.open(
         "r",
         newline="",
         encoding="utf-8-sig",
     ) as file:
-
         return list(csv.DictReader(file))
 
 
 def load_metadata_inventory(path: Path) -> dict:
-
     if not path.exists():
-        raise FileNotFoundError(
-            f"Metadata inventory not found: {path}"
-        )
+        raise FileNotFoundError(f"Metadata inventory not found: {path}")
 
-    with path.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
+    with path.open("r", encoding="utf-8") as file:
+        data = json.load(file)
 
-        return json.load(file)
+    if not isinstance(data, dict):
+        raise ValueError("Metadata inventory must contain a JSON object.")
+
+    if not isinstance(data.get("records", []), list):
+        raise ValueError("Metadata inventory 'records' must be a list.")
+
+    return data
+
+
+# --------------------------------------------------
+# Metadata indexing
+# --------------------------------------------------
+
+def build_metadata_index(metadata: dict) -> dict:
+    """
+    Index XML records by Sol and filename.
+
+    Filename matching is retained for compatibility with the
+    current inventory format. Relative paths are also indexed
+    when available.
+    """
+
+    index = defaultdict(list)
+
+    for record in metadata.get("records", []):
+        sol = str(record.get("sol_folder") or "").casefold()
+        source_file = str(record.get("source_file") or "").casefold()
+
+        if sol and source_file:
+            index[("name", sol, source_file)].append(record)
+
+        relative_path = record.get("relative_path")
+
+        if relative_path:
+            normalized_path = str(relative_path).replace("\\", "/").casefold()
+            index[("path", normalized_path)].append(record)
+
+    return index
+
+
+def find_xml_record(
+    csv_record: dict,
+    metadata_index: dict,
+) -> dict | None:
+    """Find an unambiguous XML record for one CSV inventory record."""
+
+    sol = str(csv_record.get("sol_folder") or "").casefold()
+    filename = str(csv_record.get("filename") or "")
+
+    xml_name = Path(filename).stem + ".xml"
+
+    matches = metadata_index.get(
+        ("name", sol, xml_name.casefold()),
+        [],
+    )
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if len(matches) > 1:
+        return None
+
+    relative_path = csv_record.get("relative_path")
+
+    if relative_path:
+        relative = Path(str(relative_path))
+        xml_relative = str(relative.with_suffix(".xml"))
+        xml_relative = xml_relative.replace("\\", "/").casefold()
+
+        matches = metadata_index.get(("path", xml_relative), [])
+
+        if len(matches) == 1:
+            return matches[0]
+
+    return None
 
 
 # --------------------------------------------------
-# Metadata Time Field Detection
-# --------------------------------------------------
-
-# --------------------------------------------------
-# CSV Analysis
+# CSV path resolution
 # --------------------------------------------------
 
 def resolve_csv_path(
     input_dir: Path,
-    sol_folder: str,
-    filename: str,
+    inventory_record: dict,
 ) -> Path | None:
+    """
+    Resolve a CSV using its relative path when available.
+
+    Filename-only fallback is accepted only when unique inside
+    the declared Sol directory.
+    """
+
+    relative_path = inventory_record.get("relative_path")
+
+    if relative_path:
+        candidate = input_dir / Path(relative_path)
+
+        if candidate.is_file():
+            return candidate
+
+    sol_folder = str(inventory_record.get("sol_folder") or "")
+    filename = str(inventory_record.get("filename") or "")
+
+    if not sol_folder or not filename:
+        return None
 
     sol_dir = input_dir / sol_folder
 
-    if not sol_dir.exists():
+    if not sol_dir.is_dir():
         return None
 
-    direct_path = sol_dir / filename
+    direct = sol_dir / filename
 
-    if direct_path.is_file():
-        return direct_path
+    if direct.is_file():
+        return direct
 
     matches = [
         path
@@ -186,19 +254,93 @@ def resolve_csv_path(
     return matches[0] if len(matches) == 1 else None
 
 
-def build_metadata_index(metadata: dict) -> dict:
-    """Map (sol_folder, xml filename) -> XML record (fields, has_header)."""
-    index = {}
+# --------------------------------------------------
+# CSV column mapping
+# --------------------------------------------------
 
-    for record in metadata.get("records", []):
-        key = (
-            record.get("sol_folder", "").casefold(),
-            record.get("source_file", "").casefold(),
+def build_column_mapping(
+    header: list[str] | None,
+    fields: list[dict],
+    has_header,
+) -> tuple[dict[int, int] | None, str, bool]:
+    """
+    Return:
+        mapping: XML field index -> CSV column index
+        status: mapping status
+        skip_first_row: whether the first CSV row is a header
+
+    If the XML does not establish header presence, only an exact
+    normalized header match is treated as a header automatically.
+    """
+
+    field_names = [str(field.get("name") or "") for field in fields]
+    normalized_fields = [normalize_name(name) for name in field_names]
+
+    if not field_names or any(not name for name in normalized_fields):
+        return None, "invalid_xml_field_names", False
+
+    if len(set(normalized_fields)) != len(normalized_fields):
+        return None, "duplicate_xml_field_names", False
+
+    if has_header is False:
+        return (
+            {index: index for index in range(len(fields))},
+            "positional_no_header",
+            False,
         )
-        index[key] = record
 
-    return index
+    if header is None:
+        if has_header is True:
+            return None, "header_missing", False
 
+        return (
+            {index: index for index in range(len(fields))},
+            "positional_header_unknown",
+            False,
+        )
+
+    normalized_header = [normalize_name(value) for value in header]
+
+    if len(set(normalized_header)) != len(normalized_header):
+        return None, "duplicate_csv_header_names", False
+
+    # Exact field/header match.
+    if normalized_header == normalized_fields:
+        return (
+            {index: index for index in range(len(fields))},
+            "header_exact_match",
+            True,
+        )
+
+    # Header order may differ, but all XML fields must map uniquely.
+    header_positions = {
+        name: index
+        for index, name in enumerate(normalized_header)
+        if name
+    }
+
+    if all(name in header_positions for name in normalized_fields):
+        mapping = {
+            xml_index: header_positions[field_name]
+            for xml_index, field_name in enumerate(normalized_fields)
+        }
+
+        return mapping, "header_reordered_mapped", True
+
+    if has_header is True:
+        return None, "header_mapping_ambiguous", True
+
+    # has_header is unknown. Do not discard a possible first data row.
+    return (
+        {index: index for index in range(len(fields))},
+        "positional_header_unknown",
+        False,
+    )
+
+
+# --------------------------------------------------
+# CSV analysis
+# --------------------------------------------------
 
 def analyze_csv(
     csv_path: Path,
@@ -206,7 +348,6 @@ def analyze_csv(
     axis_preference=DEFAULT_AXIS_PREFERENCE,
     gap_factor: float = 2.5,
 ) -> dict:
-    """Single streaming pass: time axis, gaps and numeric completeness."""
 
     result = {
         "row_count": 0,
@@ -228,145 +369,266 @@ def analyze_csv(
         "numeric_missing_count": 0,
         "numeric_invalid_count": 0,
         "measurement_coverage_status": "not_assessed",
+        "column_mapping_status": "not_assessed",
         "notes": [],
     }
 
-    if not xml_record or not xml_record.get("fields"):
-        result["measurement_coverage_status"] = "no_xml_fields"
-        result["notes"].append("No XML field definitions for this CSV.")
+    if not math.isfinite(gap_factor) or gap_factor <= 1:
+        raise ValueError("gap_factor must be finite and greater than 1.")
+
+    if not xml_record:
+        result["measurement_coverage_status"] = "no_xml_metadata"
+        result["column_mapping_status"] = "no_xml_metadata"
+        result["notes"].append("No matching XML metadata record.")
         return result
 
-    fields = ordered_fields(xml_record["fields"])
-    names = [f.get("name") or "" for f in fields]
-    has_header = xml_record.get("has_header")
+    if xml_record.get("parse_status") == "failed":
+        result["measurement_coverage_status"] = "xml_parse_failed"
+        result["column_mapping_status"] = "xml_parse_failed"
+        result["notes"].append(
+            str(xml_record.get("parse_error") or "XML parsing failed.")
+        )
+        return result
 
-    time_idx, time_name, kind = pick_time_column(fields, axis_preference)
-    skip = {time_idx} if time_idx is not None else set()
-    numeric_idx = numeric_column_indexes(fields, skip)
+    fields = ordered_fields(xml_record.get("fields") or [])
 
-    parser = PARSERS[kind][0] if kind else None
+    if not fields:
+        result["measurement_coverage_status"] = "no_xml_fields"
+        result["column_mapping_status"] = "no_xml_fields"
+        result["notes"].append("XML contains no usable field definitions.")
+        return result
+
+    time_idx, time_name, kind = pick_time_column(
+        fields,
+        axis_preference,
+    )
+
     result["time_field"] = time_name or ""
     result["time_kind"] = kind or ""
 
-    steps = []
-    prev = None
-    first_val = last_val = None
-    first_raw = last_raw = ""
+    parser = PARSERS[kind][0] if kind else None
+
+    skip = {time_idx} if time_idx is not None else set()
+    numeric_indexes = numeric_column_indexes(fields, skip)
+
+    seen_timestamps = set()
+    positive_steps = []
+
+    previous_timestamp = None
+    minimum_timestamp = None
+    maximum_timestamp = None
+
+    first_raw = ""
+    last_raw = ""
 
     try:
-        with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
+        with csv_path.open(
+            "r",
+            newline="",
+            encoding="utf-8-sig",
+        ) as file:
+
             reader = csv.reader(file)
 
-            if has_header:
-                header = next(reader, None)
+            first_row = next(reader, None)
 
-                if header is None:
-                    result["measurement_coverage_status"] = "empty_file"
-                    return result
+            if first_row is None:
+                result["measurement_coverage_status"] = "empty_file"
+                result["column_mapping_status"] = "not_available"
+                return result
 
-                if [norm(h) for h in header] != [norm(n) for n in names]:
-                    result["notes"].append(
-                        "CSV header differs from XML field order."
-                    )
+            mapping, mapping_status, skip_header = build_column_mapping(
+                first_row,
+                fields,
+                xml_record.get("has_header"),
+            )
 
-            for row in reader:
+            result["column_mapping_status"] = mapping_status
 
-                if not row or not any(v.strip() for v in row):
+            if mapping is None:
+                result["measurement_coverage_status"] = (
+                    "column_mapping_ambiguous"
+                )
+                result["notes"].append(
+                    "CSV columns could not be mapped safely to XML fields."
+                )
+                return result
+
+            if mapping_status == "header_reordered_mapped":
+                result["notes"].append(
+                    "CSV header order differs from XML; columns mapped by name."
+                )
+
+            if mapping_status == "positional_header_unknown":
+                result["notes"].append(
+                    "XML does not establish header presence; positional mapping used."
+                )
+
+            rows = reader
+
+            if not skip_header:
+                rows = iter([first_row, *reader])
+
+            for row in rows:
+
+                if not row or not any(value.strip() for value in row):
                     continue
 
                 result["row_count"] += 1
 
-                for i in numeric_idx:
-                    raw = row[i].strip() if i < len(row) else ""
+                # Numeric measurements
+                for xml_index in numeric_indexes:
+                    csv_index = mapping.get(xml_index)
 
-                    if raw.lower() in MISSING_TEXT:
+                    if csv_index is None or csv_index >= len(row):
                         result["numeric_missing_count"] += 1
                         continue
 
-                    try:
-                        ok = math.isfinite(float(raw))
-                    except ValueError:
-                        ok = False
+                    raw = row[csv_index].strip()
 
-                    if ok:
-                        result["numeric_value_count"] += 1
-                    else:
+                    if raw.casefold() in MISSING_TEXT:
+                        result["numeric_missing_count"] += 1
+                        continue
+
+                    number = safe_float(raw)
+
+                    if number is None:
                         result["numeric_invalid_count"] += 1
+                    else:
+                        result["numeric_value_count"] += 1
 
-                if time_idx is None:
+                # Time analysis
+                if time_idx is None or parser is None:
                     continue
 
-                raw = row[time_idx].strip() if time_idx < len(row) else ""
+                time_csv_index = mapping.get(time_idx)
 
-                if raw.lower() in MISSING_TEXT:
+                if time_csv_index is None or time_csv_index >= len(row):
                     result["missing_timestamp_count"] += 1
                     continue
 
-                value = parser(raw)
+                raw_time = row[time_csv_index].strip()
 
-                if value is None:
+                if raw_time.casefold() in MISSING_TEXT:
+                    result["missing_timestamp_count"] += 1
+                    continue
+
+                try:
+                    timestamp = parser(raw_time)
+                except (TypeError, ValueError, OverflowError):
+                    timestamp = None
+
+                if timestamp is None:
+                    result["invalid_timestamp_count"] += 1
+                    continue
+
+                # The shared parsers are expected to return numeric
+                # coordinates for the selected axis.
+                timestamp = safe_float(timestamp)
+
+                if timestamp is None:
                     result["invalid_timestamp_count"] += 1
                     continue
 
                 result["parsed_timestamp_count"] += 1
 
-                if prev is not None:
-                    step = value - prev
+                if timestamp in seen_timestamps:
+                    result["duplicate_timestamp_count"] += 1
+                else:
+                    seen_timestamps.add(timestamp)
+
+                if previous_timestamp is not None:
+                    step = timestamp - previous_timestamp
 
                     if step < 0:
                         result["out_of_order_count"] += 1
-                    elif step == 0:
-                        result["duplicate_timestamp_count"] += 1
-                    else:
-                        steps.append(step)
+                    elif step > 0:
+                        positive_steps.append(step)
 
-                prev = value
+                previous_timestamp = timestamp
 
-                if first_val is None or value < first_val:
-                    first_val, first_raw = value, raw
+                if minimum_timestamp is None or timestamp < minimum_timestamp:
+                    minimum_timestamp = timestamp
+                    first_raw = raw_time
 
-                if last_val is None or value > last_val:
-                    last_val, last_raw = value, raw
+                if maximum_timestamp is None or timestamp > maximum_timestamp:
+                    maximum_timestamp = timestamp
+                    last_raw = raw_time
 
     except (OSError, UnicodeError, csv.Error) as error:
         result["measurement_coverage_status"] = "read_failed"
         result["notes"].append(str(error))
         return result
 
-    if steps:
-        median_step = statistics.median(steps)
-        gaps = [s for s in steps if s > gap_factor * median_step]
-        result["median_step_seconds"] = round(median_step, 6)
-        result["gap_count"] = len(gaps)
-        result["largest_gap_seconds"] = round(max(steps), 6)
-        result["gap_total_seconds"] = round(sum(gaps), 6)
-
-    if first_val is not None:
+    # Temporal span is based on the minimum and maximum parsed
+    # coordinates, not on the first and last CSV rows.
+    if minimum_timestamp is not None:
         result["first_time"] = first_raw
         result["last_time"] = last_raw
-        result["span_seconds"] = round(last_val - first_val, 3)
+        result["span_seconds"] = round(
+            maximum_timestamp - minimum_timestamp,
+            6,
+        )
+
+    # Gap threshold is based on the median positive adjacent step.
+    if positive_steps:
+        median_step = statistics.median(positive_steps)
+        threshold = gap_factor * median_step
+
+        gaps = [
+            step for step in positive_steps
+            if step > threshold
+        ]
+
+        result["median_step_seconds"] = round(median_step, 6)
+        result["gap_count"] = len(gaps)
+
+        if gaps:
+            result["largest_gap_seconds"] = round(max(gaps), 6)
+            result["gap_total_seconds"] = round(sum(gaps), 6)
+        else:
+            result["largest_gap_seconds"] = 0
+            result["gap_total_seconds"] = 0
 
     if time_idx is None:
         result["measurement_coverage_status"] = "time_field_not_detected"
-        result["notes"].append("No supported time column (SCLK/UTC/LMST/LTST).")
+        result["notes"].append(
+            "No supported time field was detected from XML metadata."
+        )
+
     elif result["parsed_timestamp_count"] == 0:
         result["measurement_coverage_status"] = "timestamps_not_interpreted"
-        result["notes"].append("No values parsed for the selected time column.")
+        result["notes"].append(
+            "No values could be interpreted on the selected time axis."
+        )
+
     elif result["row_count"] == 0:
         result["measurement_coverage_status"] = "no_data_rows"
+
     else:
         result["measurement_coverage_status"] = "timestamp_analysis_available"
 
     if kind and kind != "utc":
         result["notes"].append(
-            f"Time axis is {PARSERS[kind][1]}; not converted to UTC."
+            f"Time axis: {PARSERS[kind][1]}. No UTC conversion was performed."
         )
+
+    if result["out_of_order_count"]:
+        result["notes"].append(
+            "Out-of-order timestamps were detected; gap calculations "
+            "use positive adjacent steps only."
+        )
+
+    result["notes"].append(
+        "Gap totals are sums of detected timestamp intervals, not estimates "
+        "of missing measurement duration."
+    )
 
     return result
 
 
 # --------------------------------------------------
-# Analyze Inventory
+# Analyze inventory
 # --------------------------------------------------
 
 def analyze_coverage(
@@ -376,67 +638,64 @@ def analyze_coverage(
 ) -> list[dict]:
 
     metadata_index = build_metadata_index(metadata)
-
     reports = []
 
     for record in inventory_records:
 
-        if record.get("extension", "").lower() != ".csv":
+        if str(record.get("extension") or "").lower() != ".csv":
             continue
 
-        sol_folder = record.get("sol_folder", "")
-        filename = record.get("filename", "")
+        sol_folder = str(record.get("sol_folder") or "")
+        filename = str(record.get("filename") or "")
 
-        sol_number = get_sol_number(sol_folder)
+        sol_number = safe_int(
+            record.get("sol_number"),
+            get_sol_number(sol_folder) or -1,
+        )
+
+        if sol_number < 0:
+            sol_number = None
 
         product_code = (
             record.get("product_code")
             or get_product_code(filename)
+            or ""
         )
 
         report = {
             "sol_number": sol_number,
             "sol_folder": sol_folder,
-            "product_code": product_code or "",
+            "product_code": product_code,
             "filename": filename,
             "file_size_bytes": record.get("file_size_bytes", ""),
             "row_count": 0,
             "measurement_coverage_status": "not_analyzed",
+            "column_mapping_status": "not_analyzed",
             "notes": "",
         }
 
-        metadata_key = (
-            sol_folder.casefold(),
-            filename.rsplit(".", 1)[0].casefold() + ".xml",
-        )
-
-        xml_record = metadata_index.get(metadata_key)
-
-        csv_path = resolve_csv_path(
-            input_dir,
-            sol_folder,
-            filename,
-        )
+        xml_record = find_xml_record(record, metadata_index)
+        csv_path = resolve_csv_path(input_dir, record)
 
         if csv_path is None:
+            report["measurement_coverage_status"] = "file_not_found"
+            report["notes"] = "CSV file could not be resolved on disk."
+            reports.append(report)
+            continue
 
-            report["measurement_coverage_status"] = (
-                "file_not_found"
-            )
+        if csv_path.stat().st_size == 0:
+            report["measurement_coverage_status"] = "empty_file"
+            report["notes"] = "CSV file has zero bytes."
+            reports.append(report)
+            continue
 
-            report["notes"] = "CSV file not found on disk."
+        analysis = analyze_csv(csv_path, xml_record)
 
-        else:
-
-            analysis = analyze_csv(csv_path, xml_record)
-
-            for key, value in analysis.items():
-
-                if key == "notes":
-                    report[key] = "; ".join(value)
-
-                else:
-                    report[key] = value
+        for key, value in analysis.items():
+            if key == "notes":
+                report[key] = "; ".join(value)
+            else:
+                report[key] = value
 
         reports.append(report)
 
@@ -444,13 +703,10 @@ def analyze_coverage(
 
 
 # --------------------------------------------------
-# Product and Sol Summary
+# Sol range helpers
 # --------------------------------------------------
 
-def longest_consecutive_range(
-    sol_numbers: list[int],
-) -> dict:
-
+def longest_consecutive_range(sol_numbers: list[int]) -> dict:
     if not sol_numbers:
         return {
             "start_sol": None,
@@ -460,30 +716,20 @@ def longest_consecutive_range(
 
     values = sorted(set(sol_numbers))
 
-    best_start = values[0]
-    best_end = values[0]
-
-    current_start = values[0]
-    current_end = values[0]
+    best_start = best_end = values[0]
+    current_start = current_end = values[0]
 
     for sol in values[1:]:
-
         if sol == current_end + 1:
-
             current_end = sol
-
         else:
-
             if current_end - current_start > best_end - best_start:
-                best_start = current_start
-                best_end = current_end
+                best_start, best_end = current_start, current_end
 
-            current_start = sol
-            current_end = sol
+            current_start = current_end = sol
 
     if current_end - current_start > best_end - best_start:
-        best_start = current_start
-        best_end = current_end
+        best_start, best_end = current_start, current_end
 
     return {
         "start_sol": best_start,
@@ -491,6 +737,10 @@ def longest_consecutive_range(
         "length_sols": best_end - best_start + 1,
     }
 
+
+# --------------------------------------------------
+# Product summary
+# --------------------------------------------------
 
 def build_product_summary(
     reports: list[dict],
@@ -501,15 +751,13 @@ def build_product_summary(
     products = defaultdict(list)
 
     for report in reports:
-
         product = report.get("product_code")
-
         sol = report.get("sol_number")
 
         if (
             product
             and sol is not None
-            and int(report.get("row_count") or 0) > 0
+            and safe_int(report.get("row_count")) > 0
         ):
             products[product].append(report)
 
@@ -529,27 +777,30 @@ def build_product_summary(
             if sol not in present_sols
         ]
 
-        consecutive = longest_consecutive_range(
-            present_sols
-        )
-
         summaries[product] = {
             "csv_file_count": len(records),
-            "sols_with_csv_files": len(present_sols),
-            "sols_without_csv_files": len(missing_sols),
+            "sols_with_rows": len(present_sols),
+            "sols_without_rows": len(missing_sols),
             "present_sols": present_sols,
             "missing_sols": missing_sols,
-            "longest_consecutive_file_presence": consecutive,
+            "longest_consecutive_sol_range": longest_consecutive_range(
+                present_sols
+            ),
             "total_rows": sum(
-                int(record.get("row_count") or 0)
+                safe_int(record.get("row_count"))
                 for record in records
             ),
             "total_numeric_values": sum(
-                int(record.get("numeric_value_count") or 0)
+                safe_int(record.get("numeric_value_count"))
                 for record in records
             ),
             "total_parsed_timestamps": sum(
-                int(record.get("parsed_timestamp_count") or 0)
+                safe_int(record.get("parsed_timestamp_count"))
+                for record in records
+            ),
+            "files_with_available_timestamp_analysis": sum(
+                record.get("measurement_coverage_status")
+                == "timestamp_analysis_available"
                 for record in records
             ),
         }
@@ -558,7 +809,7 @@ def build_product_summary(
 
 
 # --------------------------------------------------
-# Save Reports
+# Save reports
 # --------------------------------------------------
 
 def save_coverage_csv(
@@ -566,10 +817,7 @@ def save_coverage_csv(
     output_file: Path,
 ) -> None:
 
-    output_file.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
     with output_file.open(
         "w",
@@ -580,6 +828,7 @@ def save_coverage_csv(
         writer = csv.DictWriter(
             file,
             fieldnames=REPORT_COLUMNS,
+            extrasaction="ignore",
         )
 
         writer.writeheader()
@@ -591,16 +840,9 @@ def save_summary_json(
     output_file: Path,
 ) -> None:
 
-    output_file.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with output_file.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
-
+    with output_file.open("w", encoding="utf-8") as file:
         json.dump(
             summary,
             file,
@@ -613,7 +855,7 @@ def save_summary_json(
 # Main
 # --------------------------------------------------
 
-def main():
+def main() -> None:
 
     parser = argparse.ArgumentParser(
         description="Analyze MEDA product and Sol coverage."
@@ -661,21 +903,29 @@ def main():
         default=250,
     )
 
+    parser.add_argument(
+        "--gap-factor",
+        type=float,
+        default=2.5,
+        help="A gap is an adjacent positive time step greater than "
+             "this factor multiplied by the median positive step.",
+    )
+
     args = parser.parse_args()
 
     if args.start_sol > args.end_sol:
         parser.error("--start-sol must not exceed --end-sol")
 
-    print("Loading file inventory...")
+    if not math.isfinite(args.gap_factor) or args.gap_factor <= 1:
+        parser.error("--gap-factor must be finite and greater than 1")
 
+    print("Loading file inventory...")
     inventory = load_file_inventory(args.inventory)
 
     print("Loading XML metadata...")
-
     metadata = load_metadata_inventory(args.metadata)
 
     print("Analyzing CSV files...")
-
     reports = analyze_coverage(
         args.input,
         inventory,
@@ -683,7 +933,6 @@ def main():
     )
 
     print("Building product summaries...")
-
     product_summaries = build_product_summary(
         reports,
         args.start_sol,
@@ -691,34 +940,39 @@ def main():
     )
 
     summary = {
-        "tool": "MEDA Research Tool",
+        "tool": "MEDA Data Research & Period Analyzer",
         "module": "Coverage Analyzer",
-        "generated_at_utc": datetime.now(
-            timezone.utc
-        ).isoformat(),
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "analysis_range": {
             "start_sol": args.start_sol,
             "end_sol": args.end_sol,
         },
         "csv_files_analyzed": len(reports),
         "products": product_summaries,
-        "interpretation_note": (
-            "File presence and row counts do not establish "
-            "continuous or scientifically valid measurements. "
-            "Timestamp interpretation depends on XML metadata "
-            "and supported time formats."
-        ),
+        "gap_definition": {
+            "factor": args.gap_factor,
+            "rule": (
+                "An adjacent positive timestamp step is classified as "
+                "a gap when it exceeds gap_factor multiplied by the "
+                "median positive adjacent step."
+            ),
+            "gap_total_seconds": (
+                "Sum of detected gap intervals; not an estimate of "
+                "missing measurement duration."
+            ),
+        },
+        "interpretation_notes": [
+            "File presence, row counts and timestamp parsing do not establish scientific validity.",
+            "CSV columns are mapped using XML field names when a header is available.",
+            "Ambiguous column mappings are not used for measurement calculations.",
+            "Time axes are analyzed in their own coordinate systems and are not automatically converted to UTC.",
+            "LMST and LTST numeric coordinates depend on the shared parser conventions and require validation against authoritative MEDA documentation.",
+            "Product presence is not equivalent to continuous temporal coverage.",
+        ],
     }
 
-    save_coverage_csv(
-        reports,
-        args.output,
-    )
-
-    save_summary_json(
-        summary,
-        args.summary,
-    )
+    save_coverage_csv(reports, args.output)
+    save_summary_json(summary, args.summary)
 
     print("")
     print("Coverage analysis completed.")
