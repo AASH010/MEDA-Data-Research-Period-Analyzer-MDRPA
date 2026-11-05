@@ -1,6 +1,6 @@
 # MEDA Data Research & Period Analyzer (MDRPA)
 
-### A Scientific Data Exploration, Validation, and Candidate Period Ranking Platform for NASA Perseverance MEDA Data
+### A Scientific Data Exploration, Analysis, and Candidate Period Ranking Platform for NASA Perseverance MEDA Data
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
@@ -9,83 +9,44 @@
 
 ---
 
-## Overview
+## 1. Overview
 
-**MEDA Data Research & Period Analyzer (MDRPA)** is an independent scientific research application developed to explore, inspect, validate, and analyze environmental datasets collected by the Mars Environmental Dynamics Analyzer (MEDA) aboard NASA's Perseverance rover.
+**MEDA Data Research & Period Analyzer (MDRPA)** is an independent scientific research application designed to explore, inspect, analyze, and compare environmental datasets collected by the Mars Environmental Dynamics Analyzer (MEDA) aboard NASA's Perseverance rover.
 
-The project provides a structured analytical workflow for investigating data availability, XML metadata, temporal coverage, data completeness, quality-related indicators, and synchronization across MEDA instrument products.
+The project focuses on organizing and examining calibrated MEDA data, including:
 
-MDRPA also aims to evaluate and rank candidate observation periods using configurable analytical indicators, helping researchers identify time ranges that may be more suitable for subsequent data preparation and research workflows.
+- File availability and organization.
+- XML metadata and field definitions.
+- Temporal coverage and timestamp characteristics.
+- Data completeness and numerical characteristics.
+- Quality-related indicators and measurement uncertainty.
+- Temporal relationships between different MEDA products.
+- Comparative evaluation of candidate observation periods.
 
-The application is being developed as a standalone desktop tool with an interactive graphical interface for input management, analysis configuration, execution, visualization, and report exploration.
+MDRPA aims to provide a structured and reproducible workflow that helps researchers investigate MEDA datasets and identify candidate periods for further research.
 
-**MDRPA is an analytical support tool. It does not replace scientific validation, official instrument documentation, or expert interpretation.**
+The project is being developed as a standalone Windows desktop application with a graphical interface for input management, analysis configuration, execution, visualization, and report exploration.
 
----
-
-## Table of Contents
-
-- [Project Overview](#project-overview)
-- [Research Objectives](#research-objectives)
-- [Data Source](#data-source)
-- [Core Analysis Modules](#core-analysis-modules)
-- [Desktop Application](#desktop-application)
-- [Input Data Management](#input-data-management)
-- [Analysis Configuration](#analysis-configuration)
-- [Candidate Period Ranking](#candidate-period-ranking)
-- [Project Architecture](#project-architecture)
-- [Input Data Organization](#input-data-organization)
-- [Generated Reports](#generated-reports)
-- [Technology Stack](#technology-stack)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Scientific Principles and Limitations](#scientific-principles-and-limitations)
-- [Development Roadmap](#development-roadmap)
-- [Related Project](#related-project)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
+**MDRPA is an analytical research-support tool. It does not replace official instrument documentation, scientific validation, or expert interpretation.**
 
 ---
 
-## Project Overview
+## 2. Research Objectives
 
-Scientific analysis of environmental datasets requires more than simply loading CSV files.
-
-Reliable data assessment involves understanding the original file structure, metadata definitions, measurement timestamps, missing observations, quality indicators, and temporal relationships between different instrument products.
-
-MDRPA is designed to organize these tasks into a modular and reproducible workflow.
-
-The application aims to answer questions such as:
-
-- Which MEDA products are available within a selected Sol range?
-- Are the expected CSV and XML files present?
-- Which measurement fields and metadata definitions are available?
-- How much interpretable temporal coverage does each product provide?
-- How many records contain missing or unparseable timestamps?
-- How do different MEDA products overlap in time?
-- Which candidate periods have stronger data availability and completeness indicators?
-- How does changing the analysis configuration affect candidate period rankings?
-
-The application generates structured reports and comparative indicators to support further investigation.
-
----
-
-## Research Objectives
-
-The main research objectives are:
+The main objectives of MDRPA are:
 
 1. **Dataset Exploration** — Discover and organize MEDA products across selected Sol ranges.
-2. **Metadata Inspection** — Extract field definitions and descriptive information from XML metadata.
-3. **Temporal Coverage Assessment** — Investigate timestamp availability, missing timestamps, duplicates, and temporal boundaries.
-4. **Data Completeness Assessment** — Identify missing, non-numeric, and potentially invalid values.
-5. **Synchronization Analysis** — Investigate temporal overlap and timestamp matching between different MEDA products.
-6. **Candidate Period Evaluation** — Compare observation windows using configurable analytical indicators.
-7. **Reproducible Analysis** — Preserve configurations and generated reports to support repeatable research workflows.
-8. **Data Preparation Support** — Provide evidence that can help guide subsequent dataset selection and preparation.
+2. **Metadata Inspection** — Extract and inspect XML metadata, field definitions, units, and documented numerical ranges.
+3. **Temporal Coverage Assessment** — Examine timestamp availability, missing observations, duplicates, and temporal coverage.
+4. **Data Completeness Assessment** — Investigate missing, non-numeric, and other data characteristics.
+5. **Quality-Related Analysis** — Preserve and examine documented quality-related fields, operational/context indicators, and measurement uncertainty without assigning undocumented meanings.
+6. **Synchronization Analysis** — Investigate temporal relationships and timestamp matching between different MEDA products.
+7. **Candidate Period Evaluation** — Compare observation windows using available and documented analytical indicators.
+8. **Reproducible Research** — Preserve analysis configurations, metadata, and generated reports for independent review and comparison.
 
 ---
 
-## Data Source
+## 3. Data Source
 
 The primary data source is NASA's Planetary Data System (PDS), specifically the PDS Atmospheres Node.
 
@@ -107,52 +68,43 @@ MDRPA is designed to preserve original NASA filenames and associate measurement 
 
 ---
 
-## Core Analysis Modules
+## 4. Core Analysis Modules
 
-The analytical layer consists of six independent Python modules.
+The scientific analysis modules are maintained in `backend/analyzers/`.
 
-### 1. File Discovery
+### 4.1 File Discovery
 
 **Module:** `file_discovery.py`
 
-Responsible for discovering, identifying, and inventorying input files.
+Responsible for discovering and inventorying MEDA input files.
 
 Main responsibilities:
 
 - Detect Sol directories.
-- Extract Sol numbers from directory and filename patterns.
+- Extract Sol numbers from supported directory and filename patterns.
 - Identify MEDA product codes.
 - Discover CSV and XML files.
-- Match corresponding CSV/XML files.
-- Identify missing counterparts.
-- Detect duplicate or unsupported files.
+- Identify corresponding CSV/XML files.
+- Record missing counterparts and file-related issues.
 - Generate a structured file inventory.
 
-**Primary output:**
-
-`output/file_inventory.csv`
-
-### 2. XML Metadata Parser
+### 4.2 XML Metadata Parser
 
 **Module:** `xml_parser.py`
 
-Responsible for extracting descriptive metadata and field definitions from XML files.
+Responsible for extracting metadata and field definitions from XML products.
 
 Main responsibilities:
 
 - Parse XML metadata structures.
+- Extract product and table information.
 - Extract field names and data types.
-- Extract field descriptions and measurement units.
-- Extract documented valid ranges.
-- Preserve special constants.
+- Extract descriptions and measurement units.
+- Preserve documented numerical ranges and special constants.
 - Identify potential time-related and quality-related fields.
-- Generate a structured metadata inventory.
+- Record metadata warnings and parsing issues.
 
-**Primary output:**
-
-`output/metadata_inventory.json`
-
-### 3. Coverage Analyzer
+### 4.3 Coverage Analyzer
 
 **Module:** `coverage_analyzer.py`
 
@@ -161,19 +113,15 @@ Responsible for examining file-level and temporal coverage.
 Main responsibilities:
 
 - Analyze available CSV products.
-- Count valid data records.
+- Count data records.
 - Identify candidate timestamp fields.
-- Parse supported timestamp formats.
-- Determine first and last interpretable timestamps.
-- Count parsed, missing, and duplicate timestamps.
+- Parse supported timestamp representations.
+- Determine interpretable temporal boundaries.
+- Count parsed, missing, invalid, and duplicate timestamps where applicable.
+- Examine temporal gaps and sampling characteristics.
 - Summarize product availability across selected Sol ranges.
 
-**Primary outputs:**
-
-- `output/coverage_report.csv`
-- `output/coverage_summary.json`
-
-### 4. Quality Analyzer
+### 4.4 Quality Analyzer
 
 **Module:** `quality_analyzer.py`
 
@@ -182,19 +130,17 @@ Responsible for examining field-level data characteristics and documented numeri
 Main responsibilities:
 
 - Identify candidate quality-related fields.
-- Examine fields with documented valid ranges.
-- Count missing and non-empty values.
-- Count numeric and non-numeric values.
-- Examine distinct values.
-- Identify values outside documented numerical boundaries.
-- Preserve quality indicator values without assigning undocumented meanings.
+- Keep quality-related candidates distinct from operational/context fields.
+- Identify uncertainty-related fields.
+- Examine missing and non-empty values.
+- Examine numeric and non-numeric values.
+- Examine distinct values and field characteristics.
+- Apply documented numerical range checks where applicable.
+- Preserve field values without assigning undocumented meanings.
 
-**Primary outputs:**
+The analyzer does not assume that every field containing words such as `flag`, `status`, or `quality` has a known scientific interpretation.
 
-- `output/quality_field_report.csv`
-- `output/quality_summary.json`
-
-### 5. Synchronization Analyzer
+### 4.5 Synchronization Analyzer
 
 **Module:** `synchronization_analyzer.py`
 
@@ -203,108 +149,93 @@ Responsible for examining temporal relationships between different MEDA products
 Main responsibilities:
 
 - Identify candidate timestamp fields.
-- Parse supported timestamps.
-- Normalize timezone-aware timestamps to UTC.
-- Identify temporal overlap between product pairs.
-- Count matched and unmatched timestamps.
-- Calculate timestamp matching rates.
+- Parse supported timestamp representations.
+- Compare temporal coverage between products.
+- Identify matching and unmatched timestamps.
 - Examine timestamp differences.
 - Apply a configurable matching tolerance.
+- Preserve duplicate timestamp occurrences during matching.
+- Produce file-level and pair-level synchronization reports.
 
-**Primary outputs:**
+The selected time coordinate and its interpretation must be considered when evaluating matching tolerance.
 
-- `output/synchronization_file_report.csv`
-- `output/synchronization_pair_report.csv`
-- `output/synchronization_summary.json`
-
-### 6. Period Ranker
+### 4.6 Period Ranker
 
 **Module:** `period_ranker.py`
 
-Responsible for comparing and ranking candidate Sol windows.
+Responsible for comparing and ranking candidate Sol windows using generated analysis reports.
 
 Main responsibilities:
 
-- Divide the selected Sol range into candidate windows.
+- Divide a selected Sol range into candidate windows.
 - Aggregate available analytical indicators.
 - Evaluate file availability.
-- Examine timestamp coverage.
-- Examine data completeness.
-- Incorporate available synchronization indicators.
-- Account for unavailable metrics.
+- Examine data integrity and completeness indicators.
+- Incorporate available quality-related indicators.
+- Incorporate synchronization diagnostics.
+- Handle unavailable metrics transparently.
 - Apply configurable ranking weights.
-- Generate comparative period rankings.
+- Generate comparative candidate period rankings.
 
-Quality indicators remain unavailable when their supporting measurements cannot be calculated reliably.
-
-**Primary outputs:**
-
-- `output/period_ranking.csv`
-- `output/period_ranking_summary.json`
+The ranker is an exploratory comparison component. A higher score does not establish scientific validity.
 
 ---
 
-## Desktop Application
+## 5. Desktop Application
 
-MDRPA is planned as a standalone desktop application built with **PySide6** and **PyQtGraph**.
+MDRPA is planned as a standalone Windows desktop application.
 
-The graphical interface is intended to provide access to the analytical workflow without requiring users to modify Python source files.
+The selected GUI technology is **PySide6**, with **PyQtGraph** for interactive scientific visualizations where appropriate.
 
-### Planned Interface Sections
+The GUI is intended to provide access to the analysis workflow without requiring users to modify Python source files.
 
-| Section | Purpose |
+### Planned Application Modules
+
+| Module | Responsibility |
 |---|---|
-| Dashboard | Display analysis summaries and key indicators |
-| Data Input Manager | Select, add, remove, and validate input files |
-| File Inventory | Explore discovered MEDA files |
-| Metadata Explorer | Inspect XML metadata and field definitions |
-| Coverage Analysis | Explore temporal coverage results |
-| Quality Analysis | Examine field-level quality indicators |
-| Synchronization Analysis | Investigate temporal relationships |
-| Period Ranking | Compare candidate observation periods |
-| Analysis Settings | Configure analysis parameters |
-| Reports | Explore and export generated results |
+| Input Manager | Select and organize MEDA input data |
+| Analysis Configuration | Configure Sol ranges and analysis parameters |
+| Analysis Center | Start, monitor, and manage analysis executions |
+| Results Dashboard | Display analysis summaries and key indicators |
+| Reports & Export | Inspect and export generated reports |
+| Help / About / Credits | Provide application guidance and project information |
 
-### Visualization Capabilities
+These are planned application responsibilities. Their presence in this document does not imply that the GUI has already been implemented.
 
-The interface is intended to support:
+### Planned Interface Capabilities
 
-- Summary metric cards.
-- Interactive data tables.
-- Time coverage charts.
-- Product availability charts.
-- Missing-value summaries.
-- Synchronization comparisons.
-- Candidate period ranking charts.
+- Structured data tables.
 - Analysis progress indicators.
+- Temporal coverage charts.
+- Product availability summaries.
+- Data completeness summaries.
+- Synchronization comparisons.
+- Candidate period ranking visualizations.
+- Report inspection and export.
 
 ---
 
-## Input Data Management
+## 6. Input Data Management
 
-MDRPA is designed to support two complementary input methods.
+MDRPA is intended to support two complementary input methods.
 
-### 1. Manual File Selection
+### 6.1 Manual Selection
 
-Users will be able to select files directly through Windows Explorer.
-
-Planned capabilities:
+Planned capabilities include:
 
 - Select individual CSV files.
 - Select individual XML files.
 - Select multiple files.
 - Select complete directories.
-- Add additional files.
-- Remove selected files.
-- Clear the current selection.
-- Preview selected filenames, extensions, and file sizes.
-- Validate input files before analysis.
+- Add or remove selected files.
+- Preview filenames, extensions, and file sizes.
+- Validate selected inputs before analysis.
 
-### 2. Automatic File Discovery
+### 6.2 Automatic File Discovery
 
-The application will also support automatic discovery from selected input directories.
+The application is also intended to support discovery from selected input directories.
 
-The discovery workflow will identify:
+The discovery workflow identifies:
 
 - Sol directories.
 - Available product codes.
@@ -313,27 +244,24 @@ The discovery workflow will identify:
 - Unsupported files.
 - Potential duplicate files.
 
-Both input methods are intended to work together.
-
-Users should be able to analyze an entire dataset or a carefully selected subset.
+Both methods are intended to support analysis of complete datasets or selected subsets.
 
 ---
 
-## Analysis Configuration
+## 7. Analysis Configuration
 
-MDRPA is designed to provide configurable analysis settings through its desktop interface.
+MDRPA is designed to provide configurable analysis settings.
 
 Planned settings include:
 
 | Setting | Description |
 |---|---|
-| Input Directory | Location of the MEDA dataset |
-| Output Directory | Destination for generated reports |
+| Input Directory | Location of the selected MEDA dataset |
 | Start Sol | First Sol included in the analysis |
 | End Sol | Last Sol included in the analysis |
 | Candidate Window Size | Number of Sols grouped into each candidate period |
-| Synchronization Tolerance | Maximum permitted timestamp difference for matching |
-| Required Products | Products expected in the analysis |
+| Synchronization Tolerance | Permitted difference in the selected time coordinate |
+| Required Products | Products expected for the analysis |
 | Optional Products | Products included when available |
 | Ranking Weights | Relative contribution of available ranking indicators |
 | Minimum Metrics | Minimum number of available indicators required for ranking |
@@ -345,15 +273,13 @@ Example candidate window sizes:
 - 15 Sols
 - 20 Sols
 
-Changing the window size changes how candidate periods are grouped and compared. It does not modify the original measurement data.
+Changing the candidate window size changes how periods are grouped and compared. It does not modify the original measurement data.
 
-Settings are intended to be managed through a centralized configuration system rather than hardcoded into individual analyzers.
+Configuration management is intended to be centralized rather than independently hardcoded into individual analyzers.
 
 ---
 
-## Candidate Period Ranking
-
-One of the primary objectives of MDRPA is to evaluate and compare candidate observation periods.
+## 8. Candidate Period Ranking
 
 A candidate period represents a selected range of consecutive Sols.
 
@@ -366,199 +292,217 @@ For example, with a window size of 10 Sols:
 | Period 3 | Sol 127–136 |
 | Period 4 | Sol 137–146 |
 
-Each candidate period can be evaluated using available analytical indicators.
+Candidate periods may be compared using available analytical indicators.
 
-### Planned Ranking Dimensions
+### Ranking Dimensions
+
+The ranking workflow may consider:
 
 1. File Availability
-2. Timestamp Coverage
-3. Data Completeness
-4. Quality Indicators
-5. Synchronization Indicators
+2. Data Integrity and Completeness
+3. Quality-Related Indicators, when sufficiently supported
+4. Synchronization Diagnostics
 
 ### Ranking Principles
 
-- Each metric must have a documented calculation method.
+- Every metric must have a documented calculation method.
 - Unavailable metrics must not be replaced with invented values.
 - Missing metrics must be handled transparently.
-- Ranking weights must be configurable.
-- Comparisons must disclose which metrics were actually available.
-- Rankings must not be presented as definitive scientific assessments.
+- Ranking weights must be documented and configurable.
+- Comparisons must disclose which metrics were available.
+- Partial windows must not be treated as equivalent to complete windows.
+- Synchronization match rates must not automatically be interpreted as measurement quality.
+- A ranking score must not be presented as a scientific certification.
 
 The purpose of ranking is to support candidate selection and further investigation, not to declare a period scientifically valid solely because it receives a higher score.
 
 ---
 
-## Project Architecture
+## 9. Project Architecture
 
-MDRPA follows a modular architecture that separates analytical processing, application services, and graphical presentation.
+MDRPA follows a modular architecture that separates scientific analysis, backend orchestration, run management, graphical presentation, and reporting.
+
+### High-Level Project Structure
 
 ```text
 MEDA-Data-Research-Period-Analyzer-MDRPA/
 │
-├── main.py
-├── config.yaml
-├── requirements.txt
-├── README.md
-├── LICENSE
+├── application/
+│
+├── backend/
+│   ├── analyzers/
+│   ├── pipeline/
+│   ├── reporting/
+│   ├── run_manager/
+│   ├── validation/
+│   └── workers/
+│
+├── docs/
+│
+├── gui/
+│   ├── analysis/
+│   ├── dashboard/
+│   ├── dialogs/
+│   ├── input_manager/
+│   ├── main_window/
+│   ├── reports/
+│   ├── styles/
+│   └── tutorial/
 │
 ├── input/
-│   ├── sol_0107/
-│   ├── sol_0108/
-│   └── ...
+├── output/
+├── packaging/
+├── resources/
+├── tests/
+├── user_data/
 │
-├── analyzers/
-│   ├── file_discovery.py
-│   ├── xml_parser.py
-│   ├── coverage_analyzer.py
-│   ├── quality_analyzer.py
-│   ├── synchronization_analyzer.py
-│   └── period_ranker.py
-│
-├── services/
-│   ├── analysis_runner.py
-│   ├── report_loader.py
-│   └── config_manager.py
-│
-├── ui/
-│   ├── main_window.py
-│   ├── styles.py
-│   │
-│   ├── pages/
-│   │   ├── dashboard.py
-│   │   ├── file_inventory.py
-│   │   ├── metadata_explorer.py
-│   │   ├── coverage_page.py
-│   │   ├── quality_page.py
-│   │   ├── synchronization_page.py
-│   │   ├── ranking_page.py
-│   │   └── reports_page.py
-│   │
-│   └── widgets/
-│       ├── metric_card.py
-│       ├── chart_widget.py
-│       ├── data_table.py
-│       └── progress_panel.py
-│
-└── output/
+├── requirements.txt
+├── README.md
+└── LICENSE
 ```
+
+This is a high-level structural overview. Individual modules and their implementation status are documented separately.
 
 ### Architecture Responsibilities
 
-**Analyzers**
+**Scientific Analyzers**
 
-Perform data discovery, parsing, statistical examination, temporal analysis, and candidate ranking.
+Perform file discovery, XML parsing, coverage analysis, quality-related examination, synchronization analysis, and candidate period ranking.
 
-**Services**
+**Backend Pipeline**
 
-Coordinate analyzer execution, manage configurations, handle generated reports, and provide a bridge between the analytical layer and the interface.
+Coordinates analyzer execution and manages dependencies between analysis stages.
 
-**UI**
+**Run Manager**
 
-Provides interactive data management, configuration controls, progress monitoring, visualizations, and report exploration.
+Maintains independent analysis runs, unique Run IDs, configurations, metadata, statuses, and run-specific storage.
 
-This separation is intended to keep analytical logic independent of the graphical interface.
+**Workers and Execution Services**
+
+Support background execution and communication between the backend and the GUI.
+
+**GUI**
+
+Provides input management, configuration controls, progress monitoring, result visualization, and report exploration.
+
+**Reporting**
+
+Organizes generated analysis artifacts and supports structured report access and export.
+
+The GUI must not independently reimplement scientific analysis logic. Backend modules must remain independent of GUI rendering components.
 
 ---
 
-## Input Data Organization
+## 10. Run Isolation and Data Organization
 
-MDRPA is designed to preserve original NASA filenames while organizing files into separate Sol directories.
+Each analysis execution must be independently identifiable and stored.
+
+Every run is intended to have:
+
+- A unique Run ID.
+- Its own configuration.
+- Its own metadata.
+- Its own input and output organization.
+- Its own execution status and logs.
+
+Repeated analyses of the same Sol range must receive different Run IDs.
 
 Example:
 
 ```text
-input/
-│
-├── sol_0107/
-│   ├── ORIGINAL_MEDА_PRODUCT_1.CSV
-│   ├── ORIGINAL_MEDА_PRODUCT_1.XML
-│   └── ...
-│
-├── sol_0108/
-│   └── ...
-│
-└── sol_0109/
-    └── ...
+user_data/
+└── runs/
+    ├── range_100_150_run_001/
+    │   ├── input/
+    │   ├── output/
+    │   ├── config.json
+    │   └── run_metadata.json
+    │
+    └── range_100_150_run_002/
+        ├── input/
+        ├── output/
+        ├── config.json
+        └── run_metadata.json
 ```
 
-The actual filenames must remain unchanged when importing official NASA products.
+The actual run structure is governed by the Run Manager implementation and its integration specification.
 
-The directory structure is intended to simplify file discovery, metadata matching, and Sol-based analysis.
+Run isolation is intended to prevent accidental mixing or overwriting of data from different executions.
+
+User-generated data must remain separate from the application source and installation directories.
 
 ---
 
-## Generated Reports
+## 11. Generated Reports
 
-MDRPA is designed to produce structured reports in CSV and JSON formats.
+The analysis workflow uses structured CSV and JSON artifacts.
 
 | Report | Format | Purpose |
 |---|---|---|
 | File Inventory | CSV | Discovered files and file relationships |
 | Metadata Inventory | JSON | Extracted XML metadata |
 | Coverage Report | CSV | File-level temporal coverage |
-| Coverage Summary | JSON | Product-level coverage summaries |
+| Coverage Summary | JSON | Coverage summaries |
 | Quality Field Report | CSV | Field-level data characteristics |
-| Quality Summary | JSON | Quality analysis summaries |
+| Quality Summary | JSON | Quality analysis summary |
 | Synchronization File Report | CSV | Timestamp analysis per product |
-| Synchronization Pair Report | CSV | Temporal matching between products |
+| Synchronization Pair Report | CSV | Timestamp matching between product pairs |
 | Synchronization Summary | JSON | Synchronization overview |
 | Period Ranking | CSV | Candidate period comparison |
 | Period Ranking Summary | JSON | Ranking configuration and results |
 
-Reports are intended to preserve traceability between the original inputs, analysis settings, and generated results.
+The exact artifact paths are determined by the execution configuration and, eventually, the run-specific output directory.
+
+Reports should preserve traceability between original inputs, analysis settings, and generated results.
 
 ---
 
-## Technology Stack
+## 12. Technology Stack
 
 | Technology | Purpose |
 |---|---|
-| Python | Core application and analytical logic |
+| Python | Application and analytical logic |
 | PySide6 | Desktop graphical interface |
 | PyQtGraph | Interactive scientific visualizations |
-| Pandas | Tabular data processing |
 | NumPy | Numerical operations |
-| PyYAML | Configuration management |
+| Pandas | Tabular data processing where needed |
+| PyYAML | Configuration file support |
 | lxml | XML processing |
 | Python Standard Library | File handling, CSV, JSON, timestamps, and command-line utilities |
+| PyInstaller | Planned Windows executable packaging |
 
-The analytical modules currently use Python standard-library functionality extensively.
-
-Additional dependencies support the planned desktop interface and broader data-processing workflow.
+The exact dependencies used by each component are defined in `requirements.txt` and the corresponding implementation.
 
 ---
 
-## Installation
+## 13. Installation
 
 ### Requirements
 
-- Windows, Linux, or macOS.
+- Windows is the primary target platform.
 - Python 3.10 or newer.
-- Internet connection for downloading the official dataset.
-- Sufficient disk space for the selected MEDA files and generated reports.
+- Sufficient disk space for the selected MEDA data and generated reports.
+- Internet access when downloading official NASA/PDS datasets.
 
-### 1. Clone the Repository
+### 13.1 Clone the Repository
 
 ```bash
 git clone https://github.com/AASH010/MEDA-Data-Research-Period-Analyzer-MDRPA.git
 ```
 
-Replace `YOUR_USERNAME` with the actual GitHub account or organization.
-
-### 2. Enter the Project Directory
+### 13.2 Enter the Project Directory
 
 ```bash
 cd MEDA-Data-Research-Period-Analyzer-MDRPA
 ```
 
-### 3. Create a Virtual Environment
+### 13.3 Create a Virtual Environment
 
 ```bash
 python -m venv .venv
 ```
 
-### 4. Activate the Environment
+### 13.4 Activate the Environment
 
 Windows PowerShell:
 
@@ -566,118 +510,82 @@ Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
 ```
 
-Linux/macOS:
-
-```bash
-source .venv/bin/activate
-```
-
-### 5. Install Dependencies
+### 13.5 Install Dependencies
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
----
-
-## Usage
-
-The analytical modules are currently organized as independent scripts.
-
-The following commands represent the current command-line workflow.
-
-Run them from the project root directory.
-
-### 1. Discover Files
-
-```bash
-python analyzers/file_discovery.py
-```
-
-### 2. Parse XML Metadata
-
-```bash
-python analyzers/xml_parser.py
-```
-
-### 3. Analyze Coverage
-
-```bash
-python analyzers/coverage_analyzer.py
-```
-
-Optional Sol range:
-
-```bash
-python analyzers/coverage_analyzer.py --start-sol 107 --end-sol 250
-```
-
-### 4. Analyze Data Quality
-
-```bash
-python analyzers/quality_analyzer.py
-```
-
-### 5. Analyze Synchronization
-
-```bash
-python analyzers/synchronization_analyzer.py
-```
-
-Example with a custom tolerance:
-
-```bash
-python analyzers/synchronization_analyzer.py --tolerance 5
-```
-
-### 6. Rank Candidate Periods
-
-```bash
-python analyzers/period_ranker.py
-```
-
-Example with a 15-Sol candidate window:
-
-```bash
-python analyzers/period_ranker.py --window-size 15
-```
-
-**Important:** The commands above describe the current individual analyzer execution workflow. A unified desktop execution workflow is part of the planned application development.
-
-Run modules in their required dependency order, and ensure that their prerequisite reports exist before execution.
+These steps prepare the Python environment. They do not imply that a complete desktop application or installer is already available.
 
 ---
 
-## Scientific Principles and Limitations
+## 14. Current Development Status
+
+MDRPA is under active development.
+
+The scientific analyzer modules have undergone initial implementation and testing. However, the full application architecture, run management, integrated execution workflow, GUI, and packaging must be completed and validated through the approved development process.
+
+The project distinguishes between:
+
+- Implemented functionality.
+- Tested functionality.
+- Accepted functionality.
+- Planned functionality.
+- Known limitations.
+
+A module's initial implementation does not mean that the entire application or its scientific outputs have received final validation.
+
+For current implementation details and development decisions, refer to the relevant documents in `docs/`.
+
+---
+
+## 15. Scientific Principles and Limitations
 
 Scientific transparency is a fundamental design principle of MDRPA.
 
-### 1. Measurement Quality Is Not the Same as File Availability
+### 15.1 File Availability Is Not Data Completeness
 
 The presence of a CSV file does not establish that its measurements are complete, interpretable, or scientifically valid.
 
-### 2. Metadata Must Guide Interpretation
+### 15.2 Data Completeness Is Not Measurement Quality
 
-Field definitions, measurement units, valid ranges, special constants, and quality indicators must be interpreted using documented metadata.
+A dataset may contain many numeric values while still having measurement limitations or uncertainty.
 
-### 3. Quality Flags Must Not Be Guessed
+### 15.3 Metadata Must Guide Interpretation
+
+Field definitions, measurement units, documented ranges, special constants, and quality indicators must be interpreted using authoritative metadata.
+
+### 15.4 Quality Flags Must Not Be Guessed
 
 Quality-related values must not receive undocumented meanings or be converted into arbitrary quality scores.
 
-### 4. Timestamp Interpretation Requires Care
+Binary values must not automatically be interpreted as `1 = good` and `0 = bad`.
+
+### 15.5 Metadata Warnings Are Not Automatically Measurement Quality Issues
+
+Metadata parsing warnings, missing metadata, and measurement-level quality characteristics must remain distinguishable.
+
+### 15.6 Numeric Range Checks Are Limited
+
+Documented `valid_minimum` and `valid_maximum` values provide numerical range checks. They do not independently establish scientific validity.
+
+### 15.7 Timestamp Interpretation Requires Care
 
 Timestamp parsing must respect the documented time system.
 
-Numeric mission-specific time values must not be interpreted without an authoritative conversion definition.
+Mission-specific time values must not be converted into another time system without an authoritative reference.
 
-Timezone-aware and timezone-naive timestamps must not be compared as though they necessarily represent the same time system.
+LMST, LTST, UTC, and other time coordinates must not be treated as interchangeable.
 
-### 5. Temporal Overlap Does Not Guarantee Identical Sampling
+### 15.8 Temporal Overlap Does Not Guarantee Identical Sampling
 
-Two MEDA products may overlap in time while having different measurement schedules, sampling frequencies, or missing observations.
+Two MEDA products may overlap in time while having different sampling schedules, frequencies, or missing observations.
 
-### 6. MEDA Measurements Are Location-Specific
+Synchronization tolerance must be interpreted in the selected coordinate and must not automatically be described as SI seconds.
+
+### 15.9 MEDA Measurements Are Location-Specific
 
 MEDA observations are measurements collected at the rover's location and measurement times.
 
@@ -685,60 +593,51 @@ They do not represent continuous spatial weather coverage across every geographi
 
 In particular, MEDA data availability must not automatically be interpreted as direct environmental validation for every 10 × 10 km MarsWalk Intelligence grid cell.
 
-### 7. Candidate Rankings Are Analytical Indicators
+### 15.10 Candidate Rankings Are Exploratory
 
 A higher candidate period score indicates stronger performance according to the selected metrics and configuration.
 
 It does not independently establish scientific validity or guarantee suitability for every research purpose.
 
-### 8. Validation Status
+### 15.11 Scientific Validation
 
-The project is under active development.
+Analytical behavior and outputs must be tested against representative official MEDA files and authoritative documentation.
 
-Analytical outputs and calculations must be validated against representative official MEDA files before being treated as reliable research results.
-
----
-
-## Development Roadmap
-
-MDRPA is being developed through the following stages.
-
-- [x] Initial project architecture.
-- [x] File discovery module implementation.
-- [x] XML metadata parser implementation.
-- [x] Coverage analyzer implementation.
-- [x] Quality analyzer implementation.
-- [x] Synchronization analyzer implementation.
-- [x] Candidate period ranker implementation.
-- [ ] Comprehensive analyzer code audit.
-- [ ] Validation against real NASA MEDA datasets.
-- [ ] Cross-module integration testing.
-- [ ] Analysis runner service.
-- [ ] Report loader service.
-- [ ] Centralized configuration manager.
-- [ ] Desktop GUI foundation.
-- [ ] Manual Windows file selection.
-- [ ] Automatic input discovery integration.
-- [ ] Interactive analysis configuration.
-- [ ] Dashboard and analytical visualizations.
-- [ ] Report export and exploration.
-- [ ] Full application testing and validation.
-
-The completion status of individual modules refers to initial implementation, not final scientific validation.
+Unverified behavior and unavailable measurements must be reported transparently.
 
 ---
 
-## Related Project
+## 16. Development Roadmap
+
+MDRPA follows a controlled, phased development process.
+
+The main phases are:
+
+- **P0 — Project Governance:** Establish development rules, documentation responsibilities, and project-wide conventions.
+- **P1 — Backend Audit:** Inspect and verify the existing scientific backend.
+- **P2 — Run Manager:** Design and implement independent analysis run management.
+- **P3 — Pipeline Integration:** Integrate existing analyzers through documented interfaces.
+- **P4 — Execution Engine:** Implement background execution, progress reporting, error handling, and safe cancellation.
+- **P5 — GUI Foundation:** Establish the desktop application structure and shared interface components.
+- **P6 — GUI Modules:** Implement the functional application modules.
+- **P7 — Testing and Validation:** Perform technical, integration, regression, and scientific validation.
+- **P8 — Packaging and Release:** Prepare and validate the Windows executable and installer.
+
+A phase is not considered complete merely because its files have been created or its code has been written. Required testing, review, and explicit acceptance are mandatory.
+
+---
+
+## 17. Related Project
 
 MDRPA is an independent research utility associated with the broader **MarsWalk Intelligence (MWI)** research initiative.
 
 Its purpose is to investigate and assess MEDA environmental data before selected datasets are considered for subsequent research and data-preparation workflows.
 
-MDRPA is not the core MarsWalk Intelligence application and is maintained as a separate tool.
+MDRPA is not the core MarsWalk Intelligence application and is maintained as a separate project.
 
 ---
 
-## License
+## 18. License
 
 This project is licensed under the **MIT License**.
 
@@ -748,7 +647,7 @@ The MIT License applies to the project code distributed under this repository. I
 
 ---
 
-## Acknowledgments
+## 19. Acknowledgments
 
 MDRPA acknowledges the work of NASA, the Mars 2020 mission team, the Perseverance rover team, the MEDA instrument team, and the Planetary Data System (PDS) Atmospheres Node for making scientific mission data and documentation available to the research community.
 
