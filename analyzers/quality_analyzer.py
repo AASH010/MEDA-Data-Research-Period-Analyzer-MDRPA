@@ -1,14 +1,14 @@
-
 from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import math
 import re
 
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -24,20 +24,72 @@ DEFAULT_METADATA = Path("output/metadata_inventory.json")
 DEFAULT_OUTPUT = Path("output/quality_field_report.csv")
 DEFAULT_SUMMARY = Path("output/quality_summary.json")
 
-QUALITY_KEYWORDS = (
-    "quality",
-    "qual",
-    "flag",
-    "status",
-    "validity",
-    "confidence",
-    "data_state",
-)
-
 TOP_VALUE_LIMIT = 20
 VALUE_TRACKING_LIMIT = 5000
 
-SOL_PATTERN = re.compile(r"^sol[_-]?0*(\d+)$", re.IGNORECASE)
+SOL_PATTERN = re.compile(
+    r"^sol[_-]?0*(\d+)$",
+    re.IGNORECASE,
+)
+
+# Classification uses complete tokens, not arbitrary substrings.
+QUALITY_TERMS = {
+    "quality",
+    "qual",
+    "validity",
+    "confidence",
+}
+
+FLAG_TERMS = {
+    "flag",
+    "flags",
+    "status",
+    "state",
+}
+
+OPERATIONAL_TERMS = {
+    "operational",
+    "operation",
+    "mode",
+    "active",
+    "enabled",
+    "stable",
+    "stability",
+    "deployment",
+    "deployed",
+    "mechanism",
+    "algorithm",
+    "heater",
+    "motor",
+    "boom",
+}
+
+UNCERTAINTY_TERMS = {
+    "uncertainty",
+    "uncertainties",
+    "unc",
+    "sigma",
+    "precision",
+    "standard",
+    "deviation",
+    "error",
+}
+
+TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+
+
+# These two aliases were validated against the WS files in this project.
+# They are accepted only at their exact positions and with 18 total fields.
+WS_VALIDATED_ALIASES = {
+    15: (
+        "BOOM1_ALG_IN_STABLE_STATE",
+        "BOOM1_ALG_STATE_STABLE",
+    ),
+    16: (
+        "BOOM2_ALG_IN_STABLE_STATE",
+        "BOOM2_ALG_STATE_STABLE",
+    ),
+}
 
 
 REPORT_COLUMNS = [
@@ -71,6 +123,14 @@ REPORT_COLUMNS = [
 
 def normalize_name(value: Any) -> str:
     return norm(value)
+
+
+def tokenize(value: Any) -> set[str]:
+    return set(
+        TOKEN_PATTERN.findall(
+            str(value or "").casefold()
+        )
+    )
 
 
 def safe_float(value: Any) -> float | None:
@@ -128,6 +188,15 @@ def get_product_code(filename: str) -> str:
     return match.group(1).upper() if match else ""
 
 
+def normalize_relative_path(value: Any) -> str:
+    return (
+        str(value or "")
+        .replace("\\", "/")
+        .strip("/")
+        .casefold()
+    )
+
+
 # --------------------------------------------------
 # Bounded frequency tracking
 # --------------------------------------------------
@@ -136,22 +205,26 @@ class BoundedValueCounter:
     """
     Space-Saving frequency tracker.
 
-    Memory usage is bounded by VALUE_TRACKING_LIMIT.
-    Counts are approximate when the limit is reached.
+    Memory use is bounded by VALUE_TRACKING_LIMIT.
+    Top-value counts are approximate if capacity is reached.
+    The distinct count is reported as a lower bound when capped.
     """
 
-    def __init__(self, capacity: int = VALUE_TRACKING_LIMIT):
+    def __init__(
+        self,
+        capacity: int = VALUE_TRACKING_LIMIT,
+    ):
         self.capacity = capacity
         self.counts: dict[str, int] = {}
-        self.total_distinct_seen = 0
         self.seen_values: set[str] = set()
         self.distinct_tracking_capped = False
 
     def add(self, value: str) -> None:
+
         if value not in self.seen_values:
+
             if len(self.seen_values) < self.capacity:
                 self.seen_values.add(value)
-                self.total_distinct_seen += 1
             else:
                 self.distinct_tracking_capped = True
 
@@ -172,7 +245,11 @@ class BoundedValueCounter:
 
         self.counts[value] = minimum_count + 1
 
-    def top_values(self, limit: int = TOP_VALUE_LIMIT) -> dict:
+    def top_values(
+        self,
+        limit: int = TOP_VALUE_LIMIT,
+    ) -> dict:
+
         return dict(
             sorted(
                 self.counts.items(),
@@ -189,6 +266,7 @@ class BoundedValueCounter:
 # --------------------------------------------------
 
 def load_inventory(path: Path) -> list[dict]:
+
     if not path.exists():
         raise FileNotFoundError(
             f"File inventory not found: {path}"
@@ -203,6 +281,7 @@ def load_inventory(path: Path) -> list[dict]:
 
 
 def load_metadata(path: Path) -> dict:
+
     if not path.exists():
         raise FileNotFoundError(
             f"Metadata inventory not found: {path}"
@@ -234,6 +313,7 @@ def load_metadata(path: Path) -> dict:
 # --------------------------------------------------
 
 def metadata_sol(record: dict) -> str:
+
     sol = record.get("sol_folder")
 
     if sol:
@@ -249,12 +329,12 @@ def metadata_sol(record: dict) -> str:
 
 def build_metadata_index(metadata: dict) -> dict:
     """
-    Build indexes without silently overwriting duplicate metadata.
+    Build metadata indexes without silently overwriting duplicates.
 
-    Keys:
-        (Sol folder, XML filename)
-        relative XML path
-        unique XML stem fallback
+    Matching priority:
+      1. Sol folder + XML filename
+      2. Relative XML path
+      3. Unique XML filename stem
     """
 
     by_sol_name = defaultdict(list)
@@ -278,17 +358,20 @@ def build_metadata_index(metadata: dict) -> dict:
         stem = Path(source_file).stem.casefold()
 
         if sol:
-            by_sol_name[(sol, source_name)].append(record)
+            by_sol_name[
+                (sol, source_name)
+            ].append(record)
 
         by_stem[stem].append(record)
 
-        relative_path = record.get("relative_path")
+        relative_path = (
+            record.get("source_relative_path")
+            or record.get("relative_path")
+        )
 
         if relative_path:
-            normalized_path = (
-                str(relative_path)
-                .replace("\\", "/")
-                .casefold()
+            normalized_path = normalize_relative_path(
+                relative_path
             )
 
             by_path[normalized_path].append(record)
@@ -319,6 +402,7 @@ def find_metadata_record(
     ).casefold()
 
     if sol_folder:
+
         matches = index["by_sol_name"].get(
             (sol_folder, xml_name.casefold()),
             [],
@@ -333,13 +417,15 @@ def find_metadata_record(
     relative_path = inventory_row.get("relative_path")
 
     if relative_path:
-        xml_relative = (
+
+        xml_relative = normalize_relative_path(
             str(Path(str(relative_path)).with_suffix(".xml"))
-            .replace("\\", "/")
-            .casefold()
         )
 
-        matches = index["by_path"].get(xml_relative, [])
+        matches = index["by_path"].get(
+            xml_relative,
+            [],
+        )
 
         if len(matches) == 1:
             return matches[0], "matched_by_relative_path"
@@ -371,7 +457,11 @@ def find_csv_path(
     relative_path = inventory_row.get("relative_path")
 
     if relative_path:
-        candidate = input_root / Path(str(relative_path))
+
+        candidate = (
+            input_root
+            / Path(str(relative_path))
+        )
 
         if candidate.is_file():
             return candidate
@@ -388,14 +478,15 @@ def find_csv_path(
         return None
 
     if sol_folder:
-        sol_directory = input_root / sol_folder
 
+        sol_directory = input_root / sol_folder
         direct = sol_directory / filename
 
         if direct.is_file():
             return direct
 
         if sol_directory.is_dir():
+
             matches = [
                 path
                 for path in sol_directory.rglob("*")
@@ -424,6 +515,7 @@ def find_csv_path(
 # --------------------------------------------------
 
 def get_fields(record: dict) -> list[dict]:
+
     fields = record.get("fields", [])
 
     if not isinstance(fields, list):
@@ -446,7 +538,8 @@ def field_description(field: dict) -> str:
     )
 
 
-def field_is_quality_related(field: dict) -> bool:
+def field_search_tokens(field: dict) -> set[str]:
+
     searchable = " ".join(
         str(field.get(key) or "")
         for key in (
@@ -454,11 +547,68 @@ def field_is_quality_related(field: dict) -> bool:
             "description",
             "unit",
         )
-    ).casefold()
+    )
 
-    return any(
-        keyword in searchable
-        for keyword in QUALITY_KEYWORDS
+    return tokenize(searchable)
+
+
+def field_is_quality_candidate(field: dict) -> bool:
+    """
+    Identify explicit quality-related candidates.
+
+    Generic flag/status/state words alone are not sufficient.
+    This is a keyword candidate, not a scientific classification.
+    """
+
+    tokens = field_search_tokens(field)
+
+    return bool(tokens.intersection(QUALITY_TERMS))
+
+
+def field_is_operational_context_candidate(
+    field: dict,
+) -> bool:
+    """
+    Identify possible operational/context flags.
+
+    These candidates are kept separate from quality candidates.
+    """
+
+    tokens = field_search_tokens(field)
+
+    has_flag_term = bool(
+        tokens.intersection(FLAG_TERMS)
+    )
+
+    has_operational_term = bool(
+        tokens.intersection(OPERATIONAL_TERMS)
+    )
+
+    has_quality_term = bool(
+        tokens.intersection(QUALITY_TERMS)
+    )
+
+    return (
+        has_flag_term
+        and not has_quality_term
+        and (
+            has_operational_term
+            or bool(tokens.intersection({"status", "state"}))
+        )
+    )
+
+
+def field_is_uncertainty_candidate(field: dict) -> bool:
+    """
+    Identify measurement uncertainty candidates by documented wording.
+
+    This does not interpret uncertainty values or calculate uncertainty.
+    """
+
+    tokens = field_search_tokens(field)
+
+    return bool(
+        tokens.intersection(UNCERTAINTY_TERMS)
     )
 
 
@@ -466,21 +616,36 @@ def get_field_bounds(
     field: dict,
 ) -> tuple[float | None, float | None]:
 
-    minimum = safe_float(field.get("valid_minimum"))
-    maximum = safe_float(field.get("valid_maximum"))
+    minimum = safe_float(
+        field.get("valid_minimum")
+    )
+
+    maximum = safe_float(
+        field.get("valid_maximum")
+    )
 
     return minimum, maximum
 
 
 def field_has_range(field: dict) -> bool:
+
     minimum, maximum = get_field_bounds(field)
 
-    return minimum is not None or maximum is not None
+    return (
+        minimum is not None
+        or maximum is not None
+    )
 
 
 def select_field_categories(
     fields: list[dict],
 ) -> list[tuple[int, dict, list[str]]]:
+    """
+    Select fields for separate descriptive analysis categories.
+
+    A field may belong to more than one category.
+    No category is treated as a scientific quality verdict.
+    """
 
     selected = []
 
@@ -488,14 +653,24 @@ def select_field_categories(
 
         categories = []
 
-        if field_is_quality_related(field):
-            categories.append("quality_field")
+        if field_is_quality_candidate(field):
+            categories.append("quality_field_candidate")
+
+        if field_is_operational_context_candidate(field):
+            categories.append(
+                "operational_context_flag_candidate"
+            )
+
+        if field_is_uncertainty_candidate(field):
+            categories.append("measurement_uncertainty")
 
         if field_has_range(field):
             categories.append("range_check")
 
         if categories:
-            selected.append((index, field, categories))
+            selected.append(
+                (index, field, categories)
+            )
 
     return selected
 
@@ -509,69 +684,230 @@ def build_column_mapping(
     fields: list[dict],
     has_header: Any,
 ) -> tuple[dict[int, int] | None, bool, str]:
+    """
+    Map XML field positions to CSV column positions.
+
+    Supported mapping modes:
+      - Exact header match
+      - Reordered unique header
+      - Validated RHS duplicate XML-name positional mapping
+      - Validated WS aliases at exact positions
+      - Safe positional mapping for explicitly headerless CSV
+
+    Ambiguous mappings are rejected.
+    """
 
     field_names = [
         normalize_name(field.get("name") or "")
         for field in fields
     ]
 
-    if not field_names or any(not name for name in field_names):
+    if (
+        not field_names
+        or any(not name for name in field_names)
+    ):
         return None, False, "invalid_xml_field_names"
-
-    if len(set(field_names)) != len(field_names):
-        return None, False, "duplicate_xml_field_names"
 
     header_names = [
         normalize_name(value)
         for value in first_row
     ]
 
+    if not header_names or any(
+        not name for name in header_names
+    ):
+        return None, False, "invalid_csv_header_names"
+
+    if len(header_names) != len(field_names):
+        return None, False, "column_count_mismatch"
+
     if len(set(header_names)) != len(header_names):
         return None, False, "duplicate_csv_header_names"
 
-    positions = {
-        name: index
-        for index, name in enumerate(header_names)
-        if name
-    }
-
-    # Exact match, including the original XML field order.
+    # Exact positional header match.
     if header_names == field_names:
         return (
-            {index: index for index in range(len(fields))},
+            {
+                index: index
+                for index in range(len(fields))
+            },
             True,
             "header_exact_match",
         )
 
-    # Header exists but columns have been rearranged.
-    if all(name in positions for name in field_names):
-        mapping = {
-            xml_index: positions[name]
-            for xml_index, name in enumerate(field_names)
+    # Detect duplicate XML field-name groups.
+    duplicate_groups = defaultdict(list)
+
+    for index, name in enumerate(field_names):
+        duplicate_groups[name].append(index)
+
+    duplicate_groups = {
+        name: positions
+        for name, positions in duplicate_groups.items()
+        if len(positions) > 1
+    }
+
+    # Validated positional mapping for duplicate XML names.
+    #
+    # Every unique XML field must match the CSV header at the
+    # same position. The CSV header must uniquely distinguish
+    # all positions in each duplicate XML-name group.
+    if duplicate_groups:
+
+        safe_positional_match = True
+
+        for index, xml_name in enumerate(field_names):
+
+            if xml_name in duplicate_groups:
+                continue
+
+            if header_names[index] != xml_name:
+                safe_positional_match = False
+                break
+
+        if safe_positional_match:
+
+            for positions in duplicate_groups.values():
+
+                csv_names = [
+                    header_names[index]
+                    for index in positions
+                ]
+
+                if len(set(csv_names)) != len(csv_names):
+                    safe_positional_match = False
+                    break
+
+        if safe_positional_match:
+
+            return (
+                {
+                    index: index
+                    for index in range(len(fields))
+                },
+                True,
+                "header_positional_duplicate_xml_names",
+            )
+
+        return (
+            None,
+            False,
+            "duplicate_xml_names_mapping_ambiguous",
+        )
+
+    # Validated WS aliases.
+    #
+    # This is intentionally narrow:
+    # - Exactly 18 fields
+    # - Exactly 18 CSV columns
+    # - Differences only at positions 15 and 16
+    # - Both differences must match the known aliases
+    if len(fields) == 18:
+
+        expected_names = list(field_names)
+        alias_positions = set(WS_VALIDATED_ALIASES)
+
+        differences = {
+            index
+            for index, (xml_name, csv_name)
+            in enumerate(zip(field_names, header_names))
+            if xml_name != csv_name
         }
 
-        return mapping, True, "header_reordered_mapped"
+        if differences == alias_positions:
 
-    # Explicit XML header declaration that does not match CSV.
+            aliases_match = True
+
+            for index, (xml_alias, csv_alias) in (
+                WS_VALIDATED_ALIASES.items()
+            ):
+
+                if field_names[index] != normalize_name(xml_alias):
+                    aliases_match = False
+                    break
+
+                if header_names[index] != normalize_name(csv_alias):
+                    aliases_match = False
+                    break
+
+            other_positions_match = all(
+                field_names[index] == header_names[index]
+                for index in range(len(fields))
+                if index not in alias_positions
+            )
+
+            if aliases_match and other_positions_match:
+
+                return (
+                    {
+                        index: index
+                        for index in range(len(fields))
+                    },
+                    True,
+                    "header_positional_ws_aliases",
+                )
+
+    # Reordered unique header.
+    header_positions = {
+        name: index
+        for index, name in enumerate(header_names)
+    }
+
+    if all(
+        name in header_positions
+        for name in field_names
+    ):
+
+        mapping = {
+            xml_index: header_positions[field_name]
+            for xml_index, field_name
+            in enumerate(field_names)
+        }
+
+        return (
+            mapping,
+            True,
+            "header_reordered_mapped",
+        )
+
+    # Explicit XML declaration that a header exists.
     if has_header is True:
-        return None, False, "header_mapping_ambiguous"
+        return (
+            None,
+            False,
+            "header_mapping_mismatch",
+        )
 
-    # An unknown header state plus partial name matches is ambiguous.
-    matching_names = set(field_names).intersection(
-        set(header_names)
+    # Unknown header declaration plus partial matches is ambiguous.
+    matching_names = (
+        set(field_names)
+        .intersection(set(header_names))
     )
 
     if matching_names:
-        return None, False, "partial_header_match"
+        return (
+            None,
+            False,
+            "partial_header_match",
+        )
 
-    # Headerless positional mapping.
-    if len(first_row) != len(fields):
-        return None, False, "column_count_mismatch"
+    # Positional mapping is allowed only when XML explicitly says
+    # the CSV has no header.
+    if has_header is False:
+
+        return (
+            {
+                index: index
+                for index in range(len(fields))
+            },
+            False,
+            "headerless_positional_mapping",
+        )
 
     return (
-        {index: index for index in range(len(fields))},
+        None,
         False,
-        "positional_mapping",
+        "header_status_unknown",
     )
 
 
@@ -668,13 +1004,25 @@ def make_report_row(
     )
 
     row = {
-        "sol_number": sol_number if sol_number is not None else "",
+        "sol_number": (
+            sol_number
+            if sol_number is not None
+            else ""
+        ),
         "sol_folder": sol_folder,
         "product_code": product_code or "",
         "csv_file": filename,
-        "field_name": field.get("name", "") if field else "",
+        "field_name": (
+            field.get("name", "")
+            if field
+            else ""
+        ),
         "field_type": category,
-        "metadata_description": field_description(field) if field else "",
+        "metadata_description": (
+            field_description(field)
+            if field
+            else ""
+        ),
         "analysis_status": status,
         "total_rows": 0,
         "missing_count": 0,
@@ -702,10 +1050,18 @@ def make_report_row(
         "non_empty_count": stats["non_empty_count"],
         "numeric_count": stats["numeric_count"],
         "non_numeric_count": stats["non_numeric_count"],
-        "distinct_values_lower_bound": counter.distinct_lower_bound(),
-        "distinct_count_capped": counter.distinct_tracking_capped,
-        "below_valid_minimum": stats["below_valid_minimum"],
-        "above_valid_maximum": stats["above_valid_maximum"],
+        "distinct_values_lower_bound": (
+            counter.distinct_lower_bound()
+        ),
+        "distinct_count_capped": (
+            counter.distinct_tracking_capped
+        ),
+        "below_valid_minimum": (
+            stats["below_valid_minimum"]
+        ),
+        "above_valid_maximum": (
+            stats["above_valid_maximum"]
+        ),
         "valid_minimum": (
             stats["minimum"]
             if stats["minimum"] is not None
@@ -737,6 +1093,7 @@ def analyze_csv(
 ) -> list[dict]:
 
     if xml_record is None:
+
         return [
             make_report_row(
                 inventory_row,
@@ -751,6 +1108,7 @@ def analyze_csv(
     fields = get_fields(xml_record)
 
     if not fields:
+
         return [
             make_report_row(
                 inventory_row,
@@ -765,6 +1123,7 @@ def analyze_csv(
     selected = select_field_categories(fields)
 
     if not selected:
+
         return [
             make_report_row(
                 inventory_row,
@@ -772,11 +1131,15 @@ def analyze_csv(
                 None,
                 "file_status",
                 "no_target_fields",
-                "No quality-related fields or XML-declared valid ranges were found.",
+                (
+                    "No candidate fields or XML-declared "
+                    "valid ranges were found."
+                ),
             )
         ]
 
     try:
+
         with csv_path.open(
             "r",
             encoding="utf-8-sig",
@@ -788,6 +1151,7 @@ def analyze_csv(
             first_row = next(reader, None)
 
             if first_row is None:
+
                 return [
                     make_report_row(
                         inventory_row,
@@ -799,13 +1163,16 @@ def analyze_csv(
                     )
                 ]
 
-            mapping, skip_first_row, mapping_status = build_column_mapping(
-                first_row,
-                fields,
-                xml_record.get("has_header"),
+            mapping, skip_first_row, mapping_status = (
+                build_column_mapping(
+                    first_row,
+                    fields,
+                    xml_record.get("has_header"),
+                )
             )
 
             if mapping is None:
+
                 return [
                     make_report_row(
                         inventory_row,
@@ -813,7 +1180,10 @@ def analyze_csv(
                         None,
                         "file_status",
                         mapping_status,
-                        "CSV columns could not be mapped safely to XML fields.",
+                        (
+                            "CSV columns could not be mapped "
+                            "safely to XML fields."
+                        ),
                     )
                 ]
 
@@ -821,22 +1191,39 @@ def analyze_csv(
             field_stats = []
 
             for field_index, field, categories in selected:
+
                 for category in categories:
+
                     field_stats.append({
                         "field_index": field_index,
                         "field": field,
-                        "stats": new_field_stats(field, category),
+                        "stats": new_field_stats(
+                            field,
+                            category,
+                        ),
                     })
 
             malformed_rows = 0
-            rows_iterator = reader
 
-            if not skip_first_row:
-                rows_iterator = iter([first_row, *reader])
+            # Keep processing streaming; do not materialize
+            # all remaining CSV rows in memory.
+            if skip_first_row:
+                rows_iterator = reader
+            else:
+                rows_iterator = chain(
+                    (first_row,),
+                    reader,
+                )
 
             for row in rows_iterator:
 
-                if not row or not any(str(value).strip() for value in row):
+                if (
+                    not row
+                    or not any(
+                        str(value).strip()
+                        for value in row
+                    )
+                ):
                     continue
 
                 if len(row) != len(fields):
@@ -849,7 +1236,10 @@ def analyze_csv(
 
                     value = (
                         row[csv_index]
-                        if csv_index is not None and csv_index < len(row)
+                        if (
+                            csv_index is not None
+                            and csv_index < len(row)
+                        )
                         else None
                     )
 
@@ -862,40 +1252,68 @@ def analyze_csv(
 
             for item in field_stats:
 
+                stats = item["stats"]
+                category = stats["category"]
+
                 notes = [
                     f"Column mapping: {mapping_status}."
                 ]
 
-                if item["stats"]["minimum"] is not None or (
-                    item["stats"]["maximum"] is not None
+                if (
+                    stats["minimum"] is not None
+                    or stats["maximum"] is not None
                 ):
                     notes.append(
                         "Range checks use XML-declared valid limits only."
                     )
 
-                if item["stats"]["category"] == "quality_field":
+                if category == "quality_field_candidate":
                     notes.append(
-                        "Observed values are reported without interpreting flag meanings."
+                        "Keyword-based quality candidate only; "
+                        "flag meanings are not interpreted."
                     )
 
-                if item["stats"]["value_counter"].distinct_tracking_capped:
+                elif category == "operational_context_flag_candidate":
                     notes.append(
-                        "Distinct-value tracking reached its configured memory limit; "
-                        "the reported distinct count is a lower bound."
+                        "Possible operational/context field; "
+                        "not treated as a measurement quality flag."
+                    )
+
+                elif category == "measurement_uncertainty":
+                    notes.append(
+                        "Uncertainty-related field candidate; "
+                        "values are reported without reinterpretation."
+                    )
+
+                if stats["value_counter"].distinct_tracking_capped:
+
+                    notes.append(
+                        "Distinct-value tracking reached its configured "
+                        "memory limit; the reported distinct count "
+                        "is a lower bound."
                     )
 
                 if malformed_rows:
+
                     notes.append(
-                        f"{malformed_rows} rows had a column count different "
-                        "from the XML field count."
+                        f"{malformed_rows} rows had a column count "
+                        "different from the XML field count."
+                    )
+
+                if category == "range_check":
+
+                    notes.append(
+                        "Values outside documented limits are flagged "
+                        "for review, not automatically classified "
+                        "as scientifically invalid."
                     )
 
                 report_rows.append(
                     make_report_row(
                         inventory_row,
                         item["field"],
-                        item["stats"],
-                        item["stats"]["category"],
+                        stats,
+                        category,
                         "analysed",
                         " ".join(notes),
                     )
@@ -904,6 +1322,7 @@ def analyze_csv(
             return report_rows
 
     except (OSError, UnicodeError, csv.Error) as error:
+
         return [
             make_report_row(
                 inventory_row,
@@ -926,6 +1345,8 @@ def run_analysis(
     metadata: dict,
 ) -> list[dict]:
 
+    input_root = Path(input_root).expanduser()
+
     metadata_index = build_metadata_index(metadata)
 
     reports = []
@@ -940,9 +1361,14 @@ def run_analysis(
         .lstrip(".") == "csv"
     ]
 
-    print(f"CSV inventory entries: {len(csv_records)}")
+    print(
+        f"CSV inventory entries: {len(csv_records)}"
+    )
 
-    for position, inventory_row in enumerate(csv_records, start=1):
+    for position, inventory_row in enumerate(
+        csv_records,
+        start=1,
+    ):
 
         csv_path = find_csv_path(
             input_root,
@@ -950,6 +1376,7 @@ def run_analysis(
         )
 
         if csv_path is None:
+
             reports.append(
                 make_report_row(
                     inventory_row,
@@ -960,9 +1387,12 @@ def run_analysis(
                     "CSV path could not be resolved uniquely.",
                 )
             )
+
             continue
 
-        resolved_path = str(csv_path.resolve()).casefold()
+        resolved_path = str(
+            csv_path.resolve()
+        ).casefold()
 
         if resolved_path in processed_paths:
             continue
@@ -992,7 +1422,7 @@ def run_analysis(
 
 
 # --------------------------------------------------
-# Save reports and summary
+# Save reports
 # --------------------------------------------------
 
 def write_report(
@@ -1021,20 +1451,40 @@ def write_report(
         writer.writerows(rows)
 
 
+# --------------------------------------------------
+# Summary
+# --------------------------------------------------
+
 def build_summary(rows: list[dict]) -> dict:
 
     analysed = [
-        row for row in rows
+        row
+        for row in rows
         if row.get("analysis_status") == "analysed"
     ]
 
     quality_rows = [
-        row for row in analysed
-        if row.get("field_type") == "quality_field"
+        row
+        for row in analysed
+        if row.get("field_type") == "quality_field_candidate"
+    ]
+
+    operational_rows = [
+        row
+        for row in analysed
+        if row.get("field_type")
+        == "operational_context_flag_candidate"
+    ]
+
+    uncertainty_rows = [
+        row
+        for row in analysed
+        if row.get("field_type") == "measurement_uncertainty"
     ]
 
     range_rows = [
-        row for row in analysed
+        row
+        for row in analysed
         if row.get("field_type") == "range_check"
     ]
 
@@ -1043,40 +1493,118 @@ def build_summary(rows: list[dict]) -> dict:
         for row in rows
     )
 
+    mapping_statuses = Counter()
+
+    for row in analysed:
+
+        notes = str(row.get("notes") or "")
+
+        match = re.search(
+            r"Column mapping: ([^.]+)\.",
+            notes,
+        )
+
+        if match:
+            mapping_statuses[match.group(1)] += 1
+
     return {
         "analyzer": "MEDA Quality Analyzer",
+
+        "generated_at_utc": datetime.now(
+            timezone.utc
+        ).isoformat(),
+
         "report_row_count": len(rows),
+
         "analysed_field_reports": len(analysed),
+
+        # Backward-compatible summary key.
         "quality_field_reports": len(quality_rows),
+
+        "quality_field_candidate_reports": len(quality_rows),
+
+        "operational_context_flag_candidate_reports": (
+            len(operational_rows)
+        ),
+
+        "measurement_uncertainty_reports": (
+            len(uncertainty_rows)
+        ),
+
         "range_check_reports": len(range_rows),
+
         "file_status_reports": sum(
             row.get("field_type") == "file_status"
             for row in rows
         ),
+
         "analysis_status_counts": dict(statuses),
+
+        "column_mapping_status_counts": dict(
+            mapping_statuses
+        ),
+
         "total_rows_examined_by_field": sum(
             safe_int(row.get("total_rows"))
             for row in analysed
         ),
+
         "total_missing_values_by_field": sum(
             safe_int(row.get("missing_count"))
             for row in analysed
         ),
+
         "total_values_below_declared_minimum": sum(
             safe_int(row.get("below_valid_minimum"))
             for row in range_rows
         ),
+
         "total_values_above_declared_maximum": sum(
             safe_int(row.get("above_valid_maximum"))
             for row in range_rows
         ),
+
         "limitations": [
-            "Quality flags are reported as observed; undocumented meanings are not inferred.",
-            "Values outside XML-declared limits are flagged for review, not automatically classified as scientifically invalid.",
-            "Special constants are not automatically treated as missing values.",
-            "Quality-field and range-check reports are separate categories; a field may appear in both.",
-            "Distinct-value tracking is bounded in memory. When capped, the reported distinct count is a lower bound.",
-            "This analyzer does not determine overall instrument health or scientific suitability of a period.",
+            (
+                "Quality-related fields are keyword-based candidates; "
+                "undocumented flag meanings are not inferred."
+            ),
+            (
+                "Operational/context flags are reported separately "
+                "from quality-related candidates."
+            ),
+            (
+                "Measurement uncertainty fields are reported separately "
+                "and are not converted into a quality score."
+            ),
+            (
+                "Values outside XML-declared limits are flagged for review, "
+                "not automatically classified as scientifically invalid."
+            ),
+            (
+                "Special constants are not automatically treated "
+                "as missing values."
+            ),
+            (
+                "A field may appear in more than one report category "
+                "when it meets multiple independent selection rules."
+            ),
+            (
+                "Distinct-value tracking is bounded in memory. "
+                "When capped, the reported distinct count is a lower bound."
+            ),
+            (
+                "Duplicate XML names and known WS aliases are mapped "
+                "only under narrowly validated positional conditions."
+            ),
+            (
+                "Ambiguous column mappings are not used for measurement "
+                "calculations."
+            ),
+            (
+                "This analyzer does not determine overall instrument health "
+                "or scientific suitability of a period."
+            ),
         ],
     }
 
@@ -1091,7 +1619,11 @@ def save_summary(
         exist_ok=True,
     )
 
-    with path.open("w", encoding="utf-8") as file:
+    with path.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+
         json.dump(
             summary,
             file,
@@ -1108,8 +1640,9 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Analyze MEDA quality-related fields and "
-            "XML-declared measurement ranges."
+            "Analyze MEDA quality-related candidates, "
+            "operational/context fields, uncertainty fields, "
+            "and XML-declared measurement ranges."
         )
     )
 
@@ -1156,7 +1689,10 @@ def main() -> None:
     print("Loading XML metadata...")
     metadata = load_metadata(args.metadata)
 
-    print("Analyzing quality fields and documented ranges...")
+    print(
+        "Analyzing quality candidates, operational/context "
+        "fields, uncertainty fields and documented ranges..."
+    )
 
     reports = run_analysis(
         args.input,
@@ -1183,12 +1719,43 @@ def main() -> None:
 
     print("")
     print("Quality analysis completed.")
-    print(f"Report rows: {len(reports)}")
-    print(f"Analysed field reports: {summary['analysed_field_reports']}")
-    print(f"Quality field reports: {summary['quality_field_reports']}")
-    print(f"Range check reports: {summary['range_check_reports']}")
-    print(f"CSV report: {args.output.resolve()}")
-    print(f"JSON summary: {args.summary.resolve()}")
+
+    print(
+        f"Report rows: {len(reports)}"
+    )
+
+    print(
+        "Analysed field reports: "
+        f"{summary['analysed_field_reports']}"
+    )
+
+    print(
+        "Quality field candidate reports: "
+        f"{summary['quality_field_candidate_reports']}"
+    )
+
+    print(
+        "Operational/context flag candidate reports: "
+        f"{summary['operational_context_flag_candidate_reports']}"
+    )
+
+    print(
+        "Measurement uncertainty reports: "
+        f"{summary['measurement_uncertainty_reports']}"
+    )
+
+    print(
+        "Range check reports: "
+        f"{summary['range_check_reports']}"
+    )
+
+    print(
+        f"CSV report: {args.output.resolve()}"
+    )
+
+    print(
+        f"JSON summary: {args.summary.resolve()}"
+    )
 
 
 if __name__ == "__main__":

@@ -565,7 +565,7 @@ def calculate_sol_metrics(
         "numeric_values": coverage_data.get("numeric_values", 0),
         "numeric_missing": coverage_data.get("numeric_missing", 0),
         "numeric_invalid": coverage_data.get("numeric_invalid", 0),
-        "quality_fields_analysed": quality_data.get("analysed_fields", 0),
+        "analysed_field_reports": quality_data.get("analysed_fields", 0),
         "range_checked_fields": quality_data.get("range_checked_fields", 0),
         "range_checked_values": checked,
         "sync_files_analysed": sync_file_data.get("analysed_files", 0),
