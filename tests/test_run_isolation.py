@@ -1,3 +1,4 @@
+
 """Isolation, lifecycle, and recovery tests for RunManager."""
 
 import json
@@ -357,6 +358,216 @@ def test_fail_running_run(manager):
     assert failed.status is RunStatus.FAILED
     assert failed.metadata.started_at is not None
     assert failed.metadata.finished_at is not None
+
+
+# ---------------------------------------------------------------------
+# Failure detail persistence tests
+# ---------------------------------------------------------------------
+
+def test_fail_run_persists_failure_reason(manager):
+    manager.create_run("failed-run")
+    manager.start_run("failed-run")
+
+    failed = manager.fail_run(
+        "failed-run",
+        failure_reason="coverage_stage_failed",
+    )
+
+    assert failed.status is RunStatus.FAILED
+    assert failed.metadata.failure_reason == "coverage_stage_failed"
+
+    loaded = manager.load_persisted_metadata("failed-run")
+
+    assert loaded.status == RunStatus.FAILED.value
+    assert loaded.failure_reason == "coverage_stage_failed"
+
+
+def test_fail_run_merges_settings_updates(manager):
+    manager.create_run(
+        "failed-run",
+        settings={
+            "mode": "analysis",
+            "keep_existing": True,
+        },
+    )
+    manager.start_run("failed-run")
+
+    failed = manager.fail_run(
+        "failed-run",
+        failure_reason="pipeline_execution_failed",
+        settings_updates={
+            "execution_summary": {
+                "status": "failed",
+                "stages": [],
+            },
+            "additional_setting": "preserved",
+        },
+    )
+
+    assert failed.status is RunStatus.FAILED
+    assert failed.metadata.settings == {
+        "mode": "analysis",
+        "keep_existing": True,
+        "execution_summary": {
+            "status": "failed",
+            "stages": [],
+        },
+        "additional_setting": "preserved",
+    }
+
+    loaded = manager.load_persisted_metadata("failed-run")
+
+    assert loaded.settings == failed.metadata.settings
+    assert loaded.failure_reason == "pipeline_execution_failed"
+
+
+def test_fail_run_preserves_failure_details_after_recovery(tmp_path):
+    runs_root = tmp_path / "runs"
+
+    first_manager = RunManager(runs_root=runs_root)
+    first_manager.create_run(
+        "failed-run",
+        settings={"original": True},
+    )
+    first_manager.start_run("failed-run")
+
+    first_manager.fail_run(
+        "failed-run",
+        failure_reason="synchronization_stage_failed",
+        settings_updates={
+            "execution_summary": {
+                "status": "failed",
+                "stages": [
+                    {
+                        "stage_name": "synchronization",
+                        "status": "failed",
+                    }
+                ],
+            }
+        },
+    )
+
+    recovered_manager = RunManager(runs_root=runs_root)
+    recovered = recovered_manager.get_run("failed-run")
+
+    assert recovered.status is RunStatus.FAILED
+    assert (
+        recovered.metadata.failure_reason
+        == "synchronization_stage_failed"
+    )
+    assert recovered.metadata.settings["original"] is True
+    assert recovered.metadata.settings["execution_summary"] == {
+        "status": "failed",
+        "stages": [
+            {
+                "stage_name": "synchronization",
+                "status": "failed",
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "failure_reason",
+    [
+        "",
+        " ",
+        123,
+    ],
+)
+def test_fail_run_rejects_invalid_failure_reason(
+    manager,
+    failure_reason,
+):
+    manager.create_run("failed-run")
+    manager.start_run("failed-run")
+
+    with pytest.raises((TypeError, ValueError)):
+        manager.fail_run(
+            "failed-run",
+            failure_reason=failure_reason,
+        )
+
+    record = manager.get_run("failed-run")
+
+    assert record.status is RunStatus.RUNNING
+    assert record.metadata.failure_reason is None
+
+
+@pytest.mark.parametrize(
+    "settings_updates",
+    [
+        [],
+        "invalid",
+        123,
+    ],
+)
+def test_fail_run_rejects_non_mapping_settings_updates(
+    manager,
+    settings_updates,
+):
+    manager.create_run("failed-run")
+    manager.start_run("failed-run")
+
+    with pytest.raises(TypeError, match="settings_updates"):
+        manager.fail_run(
+            "failed-run",
+            settings_updates=settings_updates,
+        )
+
+    record = manager.get_run("failed-run")
+
+    assert record.status is RunStatus.RUNNING
+    assert record.metadata.settings == {}
+
+
+def test_fail_run_rolls_back_metadata_when_persistence_fails(
+    manager,
+    monkeypatch,
+):
+    import backend.run_manager.run_manager as run_manager_module
+
+    record = manager.create_run(
+        "failed-run",
+        settings={"original": True},
+    )
+    manager.start_run("failed-run")
+
+    original_metadata = manager.load_persisted_metadata("failed-run")
+
+    def raise_persistence_error(*args, **kwargs):
+        raise OSError("simulated metadata persistence failure")
+
+    monkeypatch.setattr(
+        run_manager_module,
+        "save_run_metadata",
+        raise_persistence_error,
+    )
+
+    with pytest.raises(
+        OSError,
+        match="simulated metadata persistence failure",
+    ):
+        manager.fail_run(
+            "failed-run",
+            failure_reason="pipeline_failed",
+            settings_updates={
+                "execution_summary": {"status": "failed"},
+            },
+        )
+
+    current = manager.get_run("failed-run")
+
+    assert current.status is RunStatus.RUNNING
+    assert current.metadata.status == RunStatus.RUNNING.value
+    assert current.metadata.failure_reason is None
+    assert current.metadata.settings == {"original": True}
+
+    persisted = manager.load_persisted_metadata("failed-run")
+
+    assert persisted.status == original_metadata.status
+    assert persisted.failure_reason == original_metadata.failure_reason
+    assert persisted.settings == original_metadata.settings
 
 
 # ---------------------------------------------------------------------

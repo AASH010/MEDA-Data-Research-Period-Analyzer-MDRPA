@@ -1,3 +1,4 @@
+
 """Unified manager for isolated MEDA analysis runs.
 
 This module coordinates run paths, metadata persistence, lifecycle status,
@@ -391,9 +392,62 @@ class RunManager:
         """Move a running run to COMPLETED."""
         return self.update_status(run_id, RunStatus.COMPLETED)
 
-    def fail_run(self, run_id: str) -> RunRecord:
-        """Move a running run to FAILED."""
-        return self.update_status(run_id, RunStatus.FAILED)
+    def fail_run(
+        self,
+        run_id: str,
+        *,
+        failure_reason: str | None = None,
+        settings_updates: Mapping[str, Any] | None = None,
+    ) -> RunRecord:
+        """Move a running run to FAILED and optionally persist failure details.
+
+        Failure details are applied before the FAILED status is persisted.
+        If persistence fails, the in-memory failure details are restored.
+
+        Existing calls using only fail_run(run_id) remain supported.
+        """
+        record = self.registry.get(run_id)
+        metadata = record.metadata
+
+        if failure_reason is not None:
+            if not isinstance(failure_reason, str):
+                raise TypeError(
+                    "failure_reason must be a string or None."
+                )
+
+            if not failure_reason.strip():
+                raise ValueError(
+                    "failure_reason must be a non-empty string or None."
+                )
+
+        if settings_updates is not None and not isinstance(
+            settings_updates,
+            Mapping,
+        ):
+            raise TypeError(
+                "settings_updates must be a mapping or None."
+            )
+
+        previous_settings = dict(metadata.settings)
+        previous_failure_reason = metadata.failure_reason
+
+        if settings_updates is not None:
+            updated_settings = dict(metadata.settings)
+            updated_settings.update(settings_updates)
+            metadata.settings = updated_settings
+
+        if failure_reason is not None:
+            metadata.failure_reason = failure_reason
+
+        try:
+            return self.update_status(
+                run_id,
+                RunStatus.FAILED,
+            )
+        except Exception:
+            metadata.settings = previous_settings
+            metadata.failure_reason = previous_failure_reason
+            raise
 
     def cancel_run(self, run_id: str) -> RunRecord:
         """Cancel a pending or running run."""
