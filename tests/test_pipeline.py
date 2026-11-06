@@ -1138,3 +1138,22 @@ def test_analysis_pipeline_rejects_mismatched_execution_run_id(
     assert manager.get_run(
         result.run_id
     ).status is RunStatus.FAILED
+    
+def test_pipeline_package_exports_public_api():
+    from backend.pipeline import (
+        AnalysisPipeline,
+        PipelineConfig,
+        PipelineExecutionResult,
+        PipelineRunResult,
+        PipelineStageResult,
+        execute_pipeline_stages,
+        validate_pipeline_config,
+    )
+
+    assert AnalysisPipeline is not None
+    assert PipelineConfig is not None
+    assert PipelineExecutionResult is not None
+    assert PipelineRunResult is not None
+    assert PipelineStageResult is not None
+    assert callable(execute_pipeline_stages)
+    assert callable(validate_pipeline_config)
