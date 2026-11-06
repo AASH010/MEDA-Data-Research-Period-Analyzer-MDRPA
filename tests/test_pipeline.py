@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 import pytest
@@ -595,6 +596,13 @@ def test_pipeline_executor_completes_all_stages(
         for stage in result.stage_results
     )
 
+    # The test discovery record has no explicit extension field.
+    # The executor must derive it from the filename.
+    assert (
+        result.stage_results[0].summary["supported_file_count"]
+        == 1
+    )
+
     expected_files = [
         "file_inventory.csv",
         "metadata_inventory.json",
@@ -614,6 +622,176 @@ def test_pipeline_executor_completes_all_stages(
 
         assert artifact.is_file()
         assert artifact.parent == run_paths.output_dir
+
+
+def test_pipeline_executor_rejects_unsupported_files(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-unsupported-files",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+    )
+
+    monkeypatch.setattr(
+        pipeline_executor.file_discovery,
+        "discover_files",
+        lambda directory: [
+            {
+                "sol_number": 100,
+                "sol_folder": "SOL100",
+                "filename": "notes.txt",
+                "extension": ".txt",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        pipeline_executor.file_discovery,
+        "write_inventory",
+        lambda records, path: _write_test_artifact(path),
+    )
+
+    result = execute_pipeline_stages(
+        config,
+        run_paths,
+    )
+
+    assert result.status == "failed"
+    assert result.successful is False
+
+    file_discovery_stage = result.stage_results[0]
+
+    assert file_discovery_stage.stage_name == "file_discovery"
+    assert file_discovery_stage.status == "failed"
+    assert file_discovery_stage.errors
+    assert "no supported CSV or XML files" in (
+        file_discovery_stage.errors[0]
+    )
+
+    # The inventory remains available for diagnostics.
+    assert (
+        run_paths.output_dir / "file_inventory.csv"
+    ).is_file()
+
+    assert [
+        stage.status
+        for stage in result.stage_results[1:]
+    ] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+    ]
+
+
+def test_pipeline_executor_accepts_filename_extension_fallback(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-extension-fallback",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+    )
+
+    _patch_successful_analyzers(monkeypatch)
+
+    result = execute_pipeline_stages(
+        config,
+        run_paths,
+    )
+
+    assert result.status == "completed"
+
+    discovery_stage = result.stage_results[0]
+
+    assert discovery_stage.status == "completed"
+    assert discovery_stage.summary["supported_file_count"] == 1
+
+
+def test_pipeline_executor_completes_with_xml_warnings(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-xml-warnings",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+    )
+
+    _patch_successful_analyzers(monkeypatch)
+
+    monkeypatch.setattr(
+        pipeline_executor.xml_parser,
+        "build_metadata_inventory",
+        lambda directory: {
+            "records": [
+                {"parse_status": "success"},
+                {"parse_status": "failed"},
+            ],
+            "summary": {
+                "xml_files_discovered": 2,
+                "successfully_parsed": 1,
+                "failed_to_parse": 1,
+            },
+        },
+    )
+
+    result = execute_pipeline_stages(
+        config,
+        run_paths,
+    )
+
+    assert result.status == "completed_with_warnings"
+    assert result.successful is True
+
+    xml_stage = next(
+        stage
+        for stage in result.stage_results
+        if stage.stage_name == "xml_parser"
+    )
+
+    assert xml_stage.status == "completed_with_warnings"
+    assert xml_stage.warnings
+    assert "1 XML file(s)" in xml_stage.warnings[0]
+
+    # A warning must not stop later dependent stages.
+    assert [
+        stage.status
+        for stage in result.stage_results
+    ] == [
+        "completed",
+        "completed_with_warnings",
+        "completed",
+        "completed",
+        "completed",
+        "completed",
+    ]
+
+    assert (
+        run_paths.output_dir / "period_ranking.csv"
+    ).is_file()
 
 
 def test_pipeline_executor_stops_after_stage_failure(
@@ -787,6 +965,7 @@ def test_pipeline_executor_rejects_missing_output_directory(
             config,
             run_paths,
         )
+
 
 # =========================================================
 # Analysis Pipeline Test Helpers
@@ -1019,7 +1198,10 @@ def test_analysis_pipeline_validates_before_creating_run(
 ):
     pipeline, manager = analysis_pipeline_instance
 
-    with pytest.raises(FileNotFoundError, match="Input directory does not exist"):
+    with pytest.raises(
+        FileNotFoundError,
+        match="Input directory does not exist",
+    ):
         pipeline.execute({
             "input_dir": tmp_path / "missing",
         })
@@ -1138,7 +1320,8 @@ def test_analysis_pipeline_rejects_mismatched_execution_run_id(
     assert manager.get_run(
         result.run_id
     ).status is RunStatus.FAILED
-    
+
+
 def test_pipeline_package_exports_public_api():
     from backend.pipeline import (
         AnalysisPipeline,
