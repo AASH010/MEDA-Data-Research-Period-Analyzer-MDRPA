@@ -787,3 +787,354 @@ def test_pipeline_executor_rejects_missing_output_directory(
             config,
             run_paths,
         )
+
+# =========================================================
+# Analysis Pipeline Test Helpers
+# =========================================================
+
+from backend.pipeline import analysis_pipeline
+from backend.pipeline.analysis_pipeline import (
+    AnalysisPipeline,
+    PipelineRunResult,
+)
+from backend.pipeline.pipeline_executor import (
+    PipelineExecutionResult,
+)
+from backend.run_manager.run_manager import RunManager
+from backend.run_manager.run_status import RunStatus
+
+
+@pytest.fixture
+def analysis_pipeline_instance(tmp_path):
+    manager = RunManager(
+        runs_root=tmp_path / "runs",
+    )
+
+    return AnalysisPipeline(manager), manager
+
+
+@pytest.fixture
+def valid_pipeline_config(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    return PipelineConfig(
+        input_dir=input_dir,
+        start_sol=100,
+        end_sol=200,
+    )
+
+
+# =========================================================
+# Analysis Pipeline Construction Tests
+# =========================================================
+
+def test_analysis_pipeline_requires_run_manager():
+    with pytest.raises(TypeError, match="RunManager"):
+        AnalysisPipeline(object())
+
+
+# =========================================================
+# Successful Run Lifecycle Tests
+# =========================================================
+
+def test_analysis_pipeline_completes_run(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    def fake_execute(config, run_paths):
+        return PipelineExecutionResult(
+            run_id=run_paths.run_id,
+            status="completed",
+            stage_results=(),
+        )
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        fake_execute,
+    )
+
+    result = pipeline.execute(
+        valid_pipeline_config,
+        input_source="MEDA",
+        application_version="1.0",
+    )
+
+    assert isinstance(result, PipelineRunResult)
+    assert result.status == RunStatus.COMPLETED.value
+    assert result.successful is True
+    assert result.error is None
+    assert result.execution is not None
+
+    stored_record = manager.get_run(result.run_id)
+
+    assert stored_record.status is RunStatus.COMPLETED
+    assert stored_record.metadata.status == "COMPLETED"
+    assert stored_record.metadata.start_sol == 100
+    assert stored_record.metadata.end_sol == 200
+    assert stored_record.metadata.input_source == "MEDA"
+    assert stored_record.metadata.application_version == "1.0"
+
+    assert (
+        stored_record.metadata.settings["input_dir"]
+        == str(valid_pipeline_config.input_dir.resolve())
+    )
+
+    assert (
+        stored_record.metadata.settings["required_products"]
+        == list(valid_pipeline_config.required_products)
+    )
+
+
+def test_analysis_pipeline_uses_supplied_run_id(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        lambda config, paths: PipelineExecutionResult(
+            run_id=paths.run_id,
+            status="completed",
+            stage_results=(),
+        ),
+    )
+
+    result = pipeline.execute(
+        valid_pipeline_config,
+        run_id="manual-pipeline-run",
+    )
+
+    assert result.run_id == "manual-pipeline-run"
+    assert manager.get_run(
+        "manual-pipeline-run"
+    ).status is RunStatus.COMPLETED
+
+
+def test_analysis_pipeline_generates_range_run_id(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        lambda config, paths: PipelineExecutionResult(
+            run_id=paths.run_id,
+            status="completed",
+            stage_results=(),
+        ),
+    )
+
+    result = pipeline.execute(valid_pipeline_config)
+
+    assert result.run_id == "run_range(100-200)_001"
+    assert manager.get_run(result.run_id).status is RunStatus.COMPLETED
+
+
+# =========================================================
+# Failed Execution Lifecycle Tests
+# =========================================================
+
+def test_analysis_pipeline_marks_run_failed_when_stage_fails(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    def fake_execute(config, run_paths):
+        return PipelineExecutionResult(
+            run_id=run_paths.run_id,
+            status="failed",
+            stage_results=(),
+        )
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        fake_execute,
+    )
+
+    result = pipeline.execute(valid_pipeline_config)
+
+    assert result.status == RunStatus.FAILED.value
+    assert result.successful is False
+    assert result.error is None
+    assert result.execution is not None
+    assert result.execution.status == "failed"
+
+    stored_record = manager.get_run(result.run_id)
+
+    assert stored_record.status is RunStatus.FAILED
+    assert stored_record.metadata.status == "FAILED"
+
+
+def test_analysis_pipeline_marks_run_failed_on_executor_exception(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    def raise_executor_error(config, run_paths):
+        raise RuntimeError("unexpected executor error")
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        raise_executor_error,
+    )
+
+    result = pipeline.execute(valid_pipeline_config)
+
+    assert result.status == RunStatus.FAILED.value
+    assert result.successful is False
+    assert result.execution is None
+    assert result.error is not None
+    assert "unexpected executor error" in result.error
+
+    stored_record = manager.get_run(result.run_id)
+
+    assert stored_record.status is RunStatus.FAILED
+    assert stored_record.metadata.status == "FAILED"
+
+
+# =========================================================
+# Validation and Run Creation Boundary Tests
+# =========================================================
+
+def test_analysis_pipeline_validates_before_creating_run(
+    analysis_pipeline_instance,
+    tmp_path,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    with pytest.raises(FileNotFoundError, match="Input directory does not exist"):
+        pipeline.execute({
+            "input_dir": tmp_path / "missing",
+        })
+
+    assert manager.list_runs() == ()
+
+
+def test_analysis_pipeline_requires_range_for_generated_run_id(
+    analysis_pipeline_instance,
+    tmp_path,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+    )
+
+    with pytest.raises(ValueError, match="start_sol and end_sol"):
+        pipeline.execute(config)
+
+    assert manager.list_runs() == ()
+
+
+def test_analysis_pipeline_allows_manual_id_without_sol_range(
+    analysis_pipeline_instance,
+    tmp_path,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+    )
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        lambda validated, paths: PipelineExecutionResult(
+            run_id=paths.run_id,
+            status="completed",
+            stage_results=(),
+        ),
+    )
+
+    result = pipeline.execute(
+        config,
+        run_id="manual-no-sol-range",
+    )
+
+    assert result.status == RunStatus.COMPLETED.value
+    assert result.run_id == "manual-no-sol-range"
+    assert manager.get_run(
+        result.run_id
+    ).metadata.start_sol is None
+
+
+# =========================================================
+# Executor Result Contract Tests
+# =========================================================
+
+def test_analysis_pipeline_rejects_non_result_from_executor(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        lambda config, paths: None,
+    )
+
+    result = pipeline.execute(valid_pipeline_config)
+
+    assert result.status == RunStatus.FAILED.value
+    assert result.execution is None
+    assert result.error is not None
+    assert "PipelineExecutionResult" in result.error
+
+    assert manager.get_run(
+        result.run_id
+    ).status is RunStatus.FAILED
+
+
+def test_analysis_pipeline_rejects_mismatched_execution_run_id(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        lambda config, paths: PipelineExecutionResult(
+            run_id="different-run",
+            status="completed",
+            stage_results=(),
+        ),
+    )
+
+    result = pipeline.execute(valid_pipeline_config)
+
+    assert result.status == RunStatus.FAILED.value
+    assert result.execution is None
+    assert result.error is not None
+    assert "does not match" in result.error
+
+    assert manager.get_run(
+        result.run_id
+    ).status is RunStatus.FAILED
