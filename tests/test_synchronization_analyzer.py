@@ -1,4 +1,5 @@
 
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -408,4 +409,124 @@ def test_compare_timestamp_series_rejects_invalid_tolerance(tolerance):
             tolerance,
             "utc",
             "utc",
+        )
+
+
+# --------------------------------------------------
+# Full run_analysis integration
+# --------------------------------------------------
+
+def test_run_analysis_processes_inventory_and_builds_product_pair(
+    tmp_path,
+):
+    input_root = tmp_path / "input"
+    sol_dir = input_root / "SOL100"
+    sol_dir.mkdir(parents=True)
+
+    first_csv = sol_dir / "sample_ATS.csv"
+    second_csv = sol_dir / "sample_PS.csv"
+
+    # LMST requires the Sol number followed by M.
+    csv_content = (
+        "LMST,MEASUREMENT\n"
+        "100M00:00:01,10\n"
+        "100M00:00:02,20\n"
+        "100M00:00:03,30\n"
+    )
+
+    first_csv.write_text(csv_content, encoding="utf-8")
+    second_csv.write_text(csv_content, encoding="utf-8")
+
+    fields = [
+        {
+            "name": "LMST",
+            "field_number": 1,
+            "data_type": "string",
+        },
+        {
+            "name": "MEASUREMENT",
+            "field_number": 2,
+            "data_type": "float",
+        },
+    ]
+
+    inventory = [
+        {
+            "filename": "sample_ATS.csv",
+            "sol_folder": "SOL100",
+            "sol_number": 100,
+            "relative_path": "SOL100/sample_ATS.csv",
+            "extension": "csv",
+            "product_code": "ATS",
+        },
+        {
+            "filename": "sample_PS.csv",
+            "sol_folder": "SOL100",
+            "sol_number": 100,
+            "relative_path": "SOL100/sample_PS.csv",
+            "extension": "csv",
+            "product_code": "PS",
+        },
+    ]
+
+    metadata_records = [
+        {
+            "source_file": "sample_ATS.xml",
+            "sol_folder": "SOL100",
+            "sol_number": 100,
+            "relative_path": "SOL100/sample_ATS.xml",
+            "has_header": True,
+            "parse_status": "parsed",
+            "fields": fields,
+        },
+        {
+            "source_file": "sample_PS.xml",
+            "sol_folder": "SOL100",
+            "sol_number": 100,
+            "relative_path": "SOL100/sample_PS.xml",
+            "has_header": True,
+            "parse_status": "parsed",
+            "fields": fields,
+        },
+    ]
+
+    file_reports, pair_reports = analyzer.run_analysis(
+        input_root=input_root,
+        inventory=inventory,
+        metadata_records=metadata_records,
+        tolerance=0.0,
+    )
+
+    assert len(file_reports) == 2
+
+    assert all(
+        row["analysis_status"] == "analysed"
+        for row in file_reports
+    ), file_reports
+
+    assert len(pair_reports) == 1
+
+    pair = pair_reports[0]
+
+    assert pair["sol_number"] == 100
+    assert pair["product_1"] == "ATS"
+    assert pair["product_2"] == "PS"
+    assert pair["comparison_status"] == "analysed"
+    assert pair["matched_timestamps"] == 3
+
+
+@pytest.mark.parametrize(
+    "tolerance",
+    [-1.0, float("inf"), float("nan")],
+)
+def test_run_analysis_rejects_invalid_tolerance(
+    tmp_path,
+    tolerance,
+):
+    with pytest.raises(ValueError):
+        analyzer.run_analysis(
+            input_root=tmp_path,
+            inventory=[],
+            metadata_records=[],
+            tolerance=tolerance,
         )

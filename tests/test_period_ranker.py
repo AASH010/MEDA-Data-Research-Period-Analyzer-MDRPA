@@ -1,4 +1,3 @@
-
 import csv
 from pathlib import Path
 from types import SimpleNamespace
@@ -536,3 +535,258 @@ def test_build_summary_documents_missing_inventory():
         "missing inventory report" in item
         for item in summary["important_limitations"]
     )
+
+
+def test_run_reads_analyzer_reports_and_writes_ranking(
+    tmp_path,
+):
+    from backend.analyzers import (
+        coverage_analyzer,
+        file_discovery,
+        quality_analyzer,
+        synchronization_analyzer,
+    )
+
+    output_dir = tmp_path / "run_output"
+    output_dir.mkdir()
+
+    inventory_path = output_dir / "file_inventory.csv"
+    coverage_path = output_dir / "coverage_report.csv"
+    quality_path = output_dir / "quality_field_report.csv"
+    sync_files_path = (
+        output_dir / "synchronization_file_report.csv"
+    )
+    sync_pairs_path = (
+        output_dir / "synchronization_pair_report.csv"
+    )
+
+    ranking_path = output_dir / "period_ranking.csv"
+    summary_path = (
+        output_dir / "period_ranking_summary.json"
+    )
+
+    # 1. File Discovery report.
+    inventory_rows = [
+        {
+            "sol_folder": "SOL100",
+            "sol_number": 100,
+            "filename": "sample_ATS.csv",
+            "relative_path": "SOL100/sample_ATS.csv",
+            "extension": "csv",
+            "product_code": "ATS",
+            "file_size_bytes": 100,
+            "file_status": "available",
+            "is_empty": False,
+            "matching_file": "sample_ATS.xml",
+            "matching_relative_path": "SOL100/sample_ATS.xml",
+            "pair_status": "matched",
+            "issues": "",
+        },
+        {
+            "sol_folder": "SOL100",
+            "sol_number": 100,
+            "filename": "sample_ATS.xml",
+            "relative_path": "SOL100/sample_ATS.xml",
+            "extension": "xml",
+            "product_code": "ATS",
+            "file_size_bytes": 100,
+            "file_status": "available",
+            "is_empty": False,
+            "matching_file": "sample_ATS.csv",
+            "matching_relative_path": "SOL100/sample_ATS.csv",
+            "pair_status": "matched",
+            "issues": "",
+        },
+    ]
+
+    file_discovery.write_inventory(
+        inventory_rows,
+        inventory_path,
+    )
+
+    # 2. Coverage Analyzer report.
+    coverage_rows = [
+        {
+            "sol_number": 100,
+            "sol_folder": "SOL100",
+            "product_code": "ATS",
+            "filename": "sample_ATS.csv",
+            "file_size_bytes": 100,
+            "row_count": 3,
+            "time_field": "LMST",
+            "time_kind": "lmst",
+            "first_time": 1,
+            "last_time": 3,
+            "span_seconds": 2,
+            "parsed_timestamp_count": 3,
+            "missing_timestamp_count": 0,
+            "invalid_timestamp_count": 0,
+            "duplicate_timestamp_count": 0,
+            "out_of_order_count": 0,
+            "median_step_seconds": 1,
+            "gap_count": 0,
+            "largest_gap_seconds": 0,
+            "gap_total_seconds": 0,
+            "numeric_value_count": 3,
+            "numeric_missing_count": 0,
+            "numeric_invalid_count": 0,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+            "column_mapping_status": "header_exact_match",
+            "notes": "",
+        },
+    ]
+
+    coverage_analyzer.save_coverage_csv(
+        coverage_rows,
+        coverage_path,
+    )
+
+    # 3. Quality Analyzer report.
+    quality_rows = [
+        {
+            "sol_number": 100,
+            "sol_folder": "SOL100",
+            "product_code": "ATS",
+            "csv_file": "sample_ATS.csv",
+            "field_name": "MEASUREMENT",
+            "field_type": "range_check",
+            "metadata_description": "",
+            "analysis_status": "analysed",
+            "total_rows": 3,
+            "missing_count": 0,
+            "non_empty_count": 3,
+            "numeric_count": 3,
+            "non_numeric_count": 0,
+            "distinct_values_lower_bound": 3,
+            "distinct_count_capped": False,
+            "below_valid_minimum": 0,
+            "above_valid_maximum": 0,
+            "valid_minimum": 0,
+            "valid_maximum": 100,
+            "top_values_json": "{}",
+            "notes": "",
+        },
+    ]
+
+    quality_analyzer.write_report(
+        quality_path,
+        quality_rows,
+    )
+
+    # 4. Synchronization Analyzer reports.
+    sync_file_rows = [
+        {
+            "sol_number": 100,
+            "sol_folder": "SOL100",
+            "product_code": "ATS",
+            "csv_file": "sample_ATS.csv",
+            "selected_time_field": "LMST",
+            "time_kind": "lmst",
+            "analysis_status": "analysed",
+            "total_rows": 3,
+            "parsed_timestamps": 3,
+            "missing_timestamps": 0,
+            "invalid_timestamps": 0,
+            "duplicate_timestamps": 0,
+            "out_of_order_timestamps": 0,
+            "median_step": 1,
+            "first_timestamp": 1,
+            "last_timestamp": 3,
+            "notes": "",
+        },
+    ]
+
+    sync_pair_rows = [
+        {
+            "sol_number": 100,
+            "product_1": "ATS",
+            "file_1": "sample_ATS.csv",
+            "product_2": "PS",
+            "file_2": "sample_PS.csv",
+            "comparison_status": "analysed",
+            "time_kind": "lmst",
+            "tolerance": 0.0,
+            "overlap_start": 1,
+            "overlap_end": 3,
+            "overlap_duration": 2,
+            "first_count": 3,
+            "second_count": 3,
+            "matched_timestamps": 3,
+            "first_unmatched": 0,
+            "second_unmatched": 0,
+            "match_rate_first_percent": 100,
+            "match_rate_second_percent": 100,
+            "match_rate_sparser_percent": 100,
+            "mean_match_difference": 0,
+            "max_match_difference": 0,
+            "notes": "",
+        },
+    ]
+
+    # Correct argument order: path, rows, columns.
+    synchronization_analyzer.write_csv(
+        sync_files_path,
+        sync_file_rows,
+        synchronization_analyzer.FILE_REPORT_COLUMNS,
+    )
+
+    synchronization_analyzer.write_csv(
+        sync_pairs_path,
+        sync_pair_rows,
+        synchronization_analyzer.PAIR_REPORT_COLUMNS,
+    )
+
+    # 5. Execute Period Ranker using the five report files.
+    # Use strings to match the paths produced by parse_args().
+    args = SimpleNamespace(
+        inventory=str(inventory_path),
+        coverage=str(coverage_path),
+        quality=str(quality_path),
+        sync_files=str(sync_files_path),
+        sync_pairs=str(sync_pairs_path),
+        start_sol=100,
+        end_sol=100,
+        required_products=["ATS"],
+        weight_files=0.20,
+        weight_integrity=0.45,
+        weight_quality=0.15,
+        weight_sync=0.20,
+        integrity_timestamps=1.0,
+        integrity_values=1.0,
+        window_size=1,
+        min_sol_fraction=1.0,
+        min_metrics=3,
+        output=str(ranking_path),
+        summary=str(summary_path),
+    )
+
+    summary = ranker.run(args)
+
+    assert ranking_path.is_file()
+    assert summary_path.is_file()
+
+    assert summary["sol_range"] == {
+        "start": 100,
+        "end": 100,
+    }
+
+    assert summary["input_report_availability"] == {
+        "inventory": True,
+        "coverage": True,
+        "quality": True,
+        "sync_files": True,
+        "sync_pairs": True,
+    }
+
+    with ranking_path.open(
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+    ) as handle:
+        ranking_rows = list(csv.DictReader(handle))
+
+    assert len(ranking_rows) == 1
+    assert ranking_rows[0]["ranking_status"] == "rankable"
+    assert ranking_rows[0]["rank"] == "1"
