@@ -57,8 +57,11 @@ class PipelineExecutionResult:
 
     @property
     def successful(self) -> bool:
-        """Whether every pipeline stage completed successfully."""
-        return self.status == "completed"
+        """Whether all executed stages completed without failure."""
+        return self.status in {
+            "completed",
+            "completed_with_warnings",
+        }
 
 
 _STAGE_NAMES = (
@@ -175,14 +178,22 @@ def _execute_one_stage(
             for path in output_paths
         )
 
+        warnings = tuple(warnings)
+
         _require_output_files(output_paths)
+
+        status = (
+            "completed_with_warnings"
+            if warnings
+            else "completed"
+        )
 
         return _make_stage_result(
             stage_name=stage_name,
-            status="completed",
+            status=status,
             started_at=started_at,
             output_paths=output_paths,
-            warnings=tuple(warnings),
+            warnings=warnings,
             summary=summary,
         )
 
@@ -275,14 +286,17 @@ def execute_pipeline_stages(
     stage_results: list[PipelineStageResult] = []
 
     def build_execution_result() -> PipelineExecutionResult:
-        overall_status = (
-            "completed"
-            if all(
-                result.status == "completed"
-                for result in stage_results
-            )
-            else "failed"
-        )
+        statuses = {
+            result.status
+            for result in stage_results
+        }
+
+        if "failed" in statuses:
+            overall_status = "failed"
+        elif "completed_with_warnings" in statuses:
+            overall_status = "completed_with_warnings"
+        else:
+            overall_status = "completed"
 
         return PipelineExecutionResult(
             run_id=run_paths.run_id,
@@ -334,19 +348,49 @@ def execute_pipeline_stages(
 
         if not inventory_records:
             raise ValueError(
-                "File Discovery found no supported files inside "
+                "File Discovery found no files inside "
                 "recognized SOL directories."
             )
 
+        # Preserve the complete inventory, including unsupported files,
+        # so that the inventory remains useful for diagnostics.
         file_discovery.write_inventory(
             inventory_records,
             artifacts["inventory"],
         )
 
+        supported_extensions = {
+            str(extension).lower()
+            for extension in file_discovery.SUPPORTED_EXTENSIONS
+        }
+
+        supported_records = []
+
+        for record in inventory_records:
+            extension = record.get("extension")
+
+            if not extension:
+                filename = (
+                    record.get("filename")
+                    or record.get("relative_path")
+                    or ""
+                )
+                extension = Path(str(filename)).suffix
+
+            if str(extension).lower() in supported_extensions:
+                supported_records.append(record)
+
+        if not supported_records:
+            raise ValueError(
+                "File Discovery found no supported CSV or XML files "
+                "inside recognized SOL directories."
+            )
+
         return (
             (artifacts["inventory"],),
             {
                 "inventory_record_count": len(inventory_records),
+                "supported_file_count": len(supported_records),
             },
             (),
         )
