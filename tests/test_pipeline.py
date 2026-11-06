@@ -21,9 +21,7 @@ def test_default_config_values(tmp_path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    config = validate_pipeline_config(
-        {"input_dir": input_dir}
-    )
+    config = validate_pipeline_config({"input_dir": input_dir})
 
     assert config.input_dir == input_dir.resolve()
     assert config.start_sol is None
@@ -66,25 +64,15 @@ def test_config_instance_is_validated(tmp_path):
     input_dir.mkdir()
 
     config = PipelineConfig(input_dir=input_dir)
-
     validated = validate_pipeline_config(config)
 
     assert validated.input_dir == input_dir.resolve()
 
 
-@pytest.mark.parametrize(
-    "input_value",
-    [
-        None,
-        "",
-        123,
-    ],
-)
+@pytest.mark.parametrize("input_value", [None, "", 123])
 def test_invalid_input_dir_type_or_value(input_value):
     with pytest.raises((TypeError, ValueError)):
-        validate_pipeline_config({
-            "input_dir": input_value,
-        })
+        validate_pipeline_config({"input_dir": input_value})
 
 
 def test_missing_input_dir_is_rejected():
@@ -94,9 +82,7 @@ def test_missing_input_dir_is_rejected():
 
 def test_nonexistent_input_dir_is_rejected(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
-        validate_pipeline_config({
-            "input_dir": tmp_path / "missing",
-        })
+        validate_pipeline_config({"input_dir": tmp_path / "missing"})
 
 
 def test_input_dir_must_be_directory(tmp_path):
@@ -104,9 +90,7 @@ def test_input_dir_must_be_directory(tmp_path):
     file_path.write_text("test", encoding="utf-8")
 
     with pytest.raises((ValueError, NotADirectoryError)):
-        validate_pipeline_config({
-            "input_dir": file_path,
-        })
+        validate_pipeline_config({"input_dir": file_path})
 
 
 def test_unknown_config_key_is_rejected(tmp_path):
@@ -130,11 +114,7 @@ def test_unknown_config_key_is_rejected(tmp_path):
         (10, False),
     ],
 )
-def test_invalid_sol_range_is_rejected(
-    tmp_path,
-    start_sol,
-    end_sol,
-):
+def test_invalid_sol_range_is_rejected(tmp_path, start_sol, end_sol):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -153,10 +133,7 @@ def test_invalid_sol_range_is_rejected(
         {"end_sol": 20},
     ],
 )
-def test_partial_sol_range_is_rejected(
-    tmp_path,
-    config_values,
-):
+def test_partial_sol_range_is_rejected(tmp_path, config_values):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -180,11 +157,7 @@ def test_partial_sol_range_is_rejected(
         ("tolerance", float("nan")),
     ],
 )
-def test_invalid_positive_numeric_parameters(
-    tmp_path,
-    field,
-    value,
-):
+def test_invalid_positive_numeric_parameters(tmp_path, field, value):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -197,18 +170,9 @@ def test_invalid_positive_numeric_parameters(
 
 @pytest.mark.parametrize(
     "window_size",
-    [
-        0,
-        -1,
-        1.5,
-        True,
-        "5",
-    ],
+    [0, -1, 1.5, True, "5"],
 )
-def test_invalid_window_size_is_rejected(
-    tmp_path,
-    window_size,
-):
+def test_invalid_window_size_is_rejected(tmp_path, window_size):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -221,18 +185,9 @@ def test_invalid_window_size_is_rejected(
 
 @pytest.mark.parametrize(
     "fraction",
-    [
-        0,
-        -0.1,
-        1.1,
-        float("inf"),
-        float("nan"),
-    ],
+    [0, -0.1, 1.1, float("inf"), float("nan")],
 )
-def test_invalid_min_sol_fraction_is_rejected(
-    tmp_path,
-    fraction,
-):
+def test_invalid_min_sol_fraction_is_rejected(tmp_path, fraction):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -245,19 +200,9 @@ def test_invalid_min_sol_fraction_is_rejected(
 
 @pytest.mark.parametrize(
     "min_metrics",
-    [
-        0,
-        5,
-        -1,
-        1.5,
-        True,
-        "3",
-    ],
+    [0, 5, -1, 1.5, True, "3"],
 )
-def test_invalid_min_metrics_is_rejected(
-    tmp_path,
-    min_metrics,
-):
+def test_invalid_min_metrics_is_rejected(tmp_path, min_metrics):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -274,33 +219,14 @@ def test_required_products_are_normalized(tmp_path):
 
     config = validate_pipeline_config({
         "input_dir": input_dir,
-        "required_products": [
-            " ats ",
-            "ps",
-            "ATS",
-            "rds",
-        ],
+        "required_products": [" ats ", "ps", "ATS", "rds"],
     })
 
-    assert config.required_products == (
-        "ATS",
-        "PS",
-        "RDS",
-    )
+    assert config.required_products == ("ATS", "PS", "RDS")
 
 
-@pytest.mark.parametrize(
-    "products",
-    [
-        [],
-        (),
-        "",
-    ],
-)
-def test_empty_required_products_are_rejected(
-    tmp_path,
-    products,
-):
+@pytest.mark.parametrize("products", [[], (), ""])
+def test_empty_required_products_are_rejected(tmp_path, products):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -311,18 +237,8 @@ def test_empty_required_products_are_rejected(
         })
 
 
-@pytest.mark.parametrize(
-    "products",
-    [
-        None,
-        123,
-        {"ATS"},
-    ],
-)
-def test_invalid_required_products_type_is_rejected(
-    tmp_path,
-    products,
-):
+@pytest.mark.parametrize("products", [None, 123, {"ATS"}])
+def test_invalid_required_products_type_is_rejected(tmp_path, products):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -347,11 +263,7 @@ def test_invalid_required_products_type_is_rejected(
         ("weight_quality", True),
     ],
 )
-def test_invalid_weights_are_rejected(
-    tmp_path,
-    field,
-    value,
-):
+def test_invalid_weights_are_rejected(tmp_path, field, value):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -394,15 +306,8 @@ def test_all_integrity_weights_zero_are_rejected(tmp_path):
 
 
 def _write_test_artifact(path, content="test"):
-    path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    path.write_text(
-        content,
-        encoding="utf-8",
-    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 def _patch_successful_analyzers(monkeypatch):
@@ -430,9 +335,7 @@ def _patch_successful_analyzers(monkeypatch):
         pipeline_executor.xml_parser,
         "build_metadata_inventory",
         lambda input_dir: {
-            "records": [
-                {"parse_status": "success"},
-            ],
+            "records": [{"parse_status": "success"}],
             "summary": {
                 "xml_files_discovered": 1,
                 "successfully_parsed": 1,
@@ -464,9 +367,7 @@ def _patch_successful_analyzers(monkeypatch):
     monkeypatch.setattr(
         pipeline_executor.coverage_analyzer,
         "build_product_summary",
-        lambda reports, start, end: {
-            "ATS": {},
-        },
+        lambda reports, start, end: {"ATS": {}},
     )
 
     monkeypatch.setattr(
@@ -492,9 +393,7 @@ def _patch_successful_analyzers(monkeypatch):
     monkeypatch.setattr(
         pipeline_executor.quality_analyzer,
         "build_summary",
-        lambda rows: {
-            "report_row_count": len(rows),
-        },
+        lambda rows: {"report_row_count": len(rows)},
     )
 
     monkeypatch.setattr(
@@ -536,9 +435,7 @@ def _patch_successful_analyzers(monkeypatch):
     def fake_ranker_run(args):
         _write_test_artifact(Path(args.output))
         _write_test_artifact(Path(args.summary))
-        return {
-            "rankable_windows": 1,
-        }
+        return {"rankable_windows": 1}
 
     monkeypatch.setattr(
         pipeline_executor.period_ranker,
@@ -552,10 +449,7 @@ def _patch_successful_analyzers(monkeypatch):
 # =========================================================
 
 
-def test_pipeline_executor_completes_all_stages(
-    tmp_path,
-    monkeypatch,
-):
+def test_pipeline_executor_completes_all_stages(tmp_path, monkeypatch):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -564,24 +458,17 @@ def test_pipeline_executor_completes_all_stages(
         tmp_path / "runs",
     )
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
-
+    config = PipelineConfig(input_dir=input_dir)
     _patch_successful_analyzers(monkeypatch)
 
-    result = execute_pipeline_stages(
-        config,
-        run_paths,
-    )
+    result = execute_pipeline_stages(config, run_paths)
 
     assert result.run_id == "executor-success"
     assert result.status == "completed"
     assert result.successful is True
 
     assert [
-        stage.stage_name
-        for stage in result.stage_results
+        stage.stage_name for stage in result.stage_results
     ] == [
         "file_discovery",
         "xml_parser",
@@ -596,12 +483,7 @@ def test_pipeline_executor_completes_all_stages(
         for stage in result.stage_results
     )
 
-    # The test discovery record has no explicit extension field.
-    # The executor must derive it from the filename.
-    assert (
-        result.stage_results[0].summary["supported_file_count"]
-        == 1
-    )
+    assert result.stage_results[0].summary["supported_file_count"] == 1
 
     expected_files = [
         "file_inventory.csv",
@@ -619,15 +501,11 @@ def test_pipeline_executor_completes_all_stages(
 
     for filename in expected_files:
         artifact = run_paths.output_dir / filename
-
         assert artifact.is_file()
         assert artifact.parent == run_paths.output_dir
 
 
-def test_pipeline_executor_rejects_unsupported_files(
-    tmp_path,
-    monkeypatch,
-):
+def test_pipeline_executor_rejects_unsupported_files(tmp_path, monkeypatch):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -636,9 +514,7 @@ def test_pipeline_executor_rejects_unsupported_files(
         tmp_path / "runs",
     )
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
+    config = PipelineConfig(input_dir=input_dir)
 
     monkeypatch.setattr(
         pipeline_executor.file_discovery,
@@ -659,10 +535,7 @@ def test_pipeline_executor_rejects_unsupported_files(
         lambda records, path: _write_test_artifact(path),
     )
 
-    result = execute_pipeline_stages(
-        config,
-        run_paths,
-    )
+    result = execute_pipeline_stages(config, run_paths)
 
     assert result.status == "failed"
     assert result.successful is False
@@ -672,18 +545,12 @@ def test_pipeline_executor_rejects_unsupported_files(
     assert file_discovery_stage.stage_name == "file_discovery"
     assert file_discovery_stage.status == "failed"
     assert file_discovery_stage.errors
-    assert "no supported CSV or XML files" in (
-        file_discovery_stage.errors[0]
-    )
+    assert "no supported CSV or XML files" in file_discovery_stage.errors[0]
 
-    # The inventory remains available for diagnostics.
-    assert (
-        run_paths.output_dir / "file_inventory.csv"
-    ).is_file()
+    assert (run_paths.output_dir / "file_inventory.csv").is_file()
 
     assert [
-        stage.status
-        for stage in result.stage_results[1:]
+        stage.status for stage in result.stage_results[1:]
     ] == [
         "skipped",
         "skipped",
@@ -705,16 +572,10 @@ def test_pipeline_executor_accepts_filename_extension_fallback(
         tmp_path / "runs",
     )
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
-
+    config = PipelineConfig(input_dir=input_dir)
     _patch_successful_analyzers(monkeypatch)
 
-    result = execute_pipeline_stages(
-        config,
-        run_paths,
-    )
+    result = execute_pipeline_stages(config, run_paths)
 
     assert result.status == "completed"
 
@@ -736,10 +597,7 @@ def test_pipeline_executor_completes_with_xml_warnings(
         tmp_path / "runs",
     )
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
-
+    config = PipelineConfig(input_dir=input_dir)
     _patch_successful_analyzers(monkeypatch)
 
     monkeypatch.setattr(
@@ -758,10 +616,7 @@ def test_pipeline_executor_completes_with_xml_warnings(
         },
     )
 
-    result = execute_pipeline_stages(
-        config,
-        run_paths,
-    )
+    result = execute_pipeline_stages(config, run_paths)
 
     assert result.status == "completed_with_warnings"
     assert result.successful is True
@@ -776,10 +631,8 @@ def test_pipeline_executor_completes_with_xml_warnings(
     assert xml_stage.warnings
     assert "1 XML file(s)" in xml_stage.warnings[0]
 
-    # A warning must not stop later dependent stages.
     assert [
-        stage.status
-        for stage in result.stage_results
+        stage.status for stage in result.stage_results
     ] == [
         "completed",
         "completed_with_warnings",
@@ -789,9 +642,7 @@ def test_pipeline_executor_completes_with_xml_warnings(
         "completed",
     ]
 
-    assert (
-        run_paths.output_dir / "period_ranking.csv"
-    ).is_file()
+    assert (run_paths.output_dir / "period_ranking.csv").is_file()
 
 
 def test_pipeline_executor_stops_after_stage_failure(
@@ -806,10 +657,7 @@ def test_pipeline_executor_stops_after_stage_failure(
         tmp_path / "runs",
     )
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
-
+    config = PipelineConfig(input_dir=input_dir)
     _patch_successful_analyzers(monkeypatch)
 
     calls = {
@@ -818,9 +666,7 @@ def test_pipeline_executor_stops_after_stage_failure(
     }
 
     def fail_quality(*args, **kwargs):
-        raise RuntimeError(
-            "quality stage test failure"
-        )
+        raise RuntimeError("quality stage test failure")
 
     def track_synchronization(*args, **kwargs):
         calls["synchronization"] += 1
@@ -848,10 +694,7 @@ def test_pipeline_executor_stops_after_stage_failure(
         track_ranker,
     )
 
-    result = execute_pipeline_stages(
-        config,
-        run_paths,
-    )
+    result = execute_pipeline_stages(config, run_paths)
 
     assert result.status == "failed"
     assert result.successful is False
@@ -880,72 +723,42 @@ def test_pipeline_executor_stops_after_stage_failure(
     )
 
     assert quality_stage.errors
+    assert "quality stage test failure" in quality_stage.errors[0]
 
-    assert (
-        "quality stage test failure"
-        in quality_stage.errors[0]
-    )
+    assert (run_paths.output_dir / "file_inventory.csv").is_file()
+    assert (run_paths.output_dir / "metadata_inventory.json").is_file()
+    assert (run_paths.output_dir / "coverage_report.csv").is_file()
 
-    # Completed artifacts must remain available.
-    assert (
-        run_paths.output_dir / "file_inventory.csv"
-    ).is_file()
-
-    assert (
-        run_paths.output_dir / "metadata_inventory.json"
-    ).is_file()
-
-    assert (
-        run_paths.output_dir / "coverage_report.csv"
-    ).is_file()
-
-    # Dependent stages must not create outputs.
     assert not (
-        run_paths.output_dir
-        / "synchronization_file_report.csv"
+        run_paths.output_dir / "synchronization_file_report.csv"
     ).exists()
 
     assert not (
-        run_paths.output_dir
-        / "period_ranking.csv"
+        run_paths.output_dir / "period_ranking.csv"
     ).exists()
 
 
-def test_pipeline_executor_requires_validated_config(
-    tmp_path,
-):
+def test_pipeline_executor_requires_validated_config(tmp_path):
     run_paths = RunPaths.create(
         "executor-invalid-config",
         tmp_path / "runs",
     )
 
     with pytest.raises(TypeError):
-        execute_pipeline_stages(
-            {"input_dir": tmp_path},
-            run_paths,
-        )
+        execute_pipeline_stages({"input_dir": tmp_path}, run_paths)
 
 
-def test_pipeline_executor_requires_run_paths(
-    tmp_path,
-):
+def test_pipeline_executor_requires_run_paths(tmp_path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
+    config = PipelineConfig(input_dir=input_dir)
 
     with pytest.raises(TypeError):
-        execute_pipeline_stages(
-            config,
-            tmp_path,
-        )
+        execute_pipeline_stages(config, tmp_path)
 
 
-def test_pipeline_executor_rejects_missing_output_directory(
-    tmp_path,
-):
+def test_pipeline_executor_rejects_missing_output_directory(tmp_path):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -956,15 +769,10 @@ def test_pipeline_executor_rejects_missing_output_directory(
 
     run_paths.output_dir.rmdir()
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
+    config = PipelineConfig(input_dir=input_dir)
 
     with pytest.raises(FileNotFoundError):
-        execute_pipeline_stages(
-            config,
-            run_paths,
-        )
+        execute_pipeline_stages(config, run_paths)
 
 
 # =========================================================
@@ -978,6 +786,7 @@ from backend.pipeline.analysis_pipeline import (
 )
 from backend.pipeline.pipeline_executor import (
     PipelineExecutionResult,
+    PipelineStageResult,
 )
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_status import RunStatus
@@ -985,10 +794,7 @@ from backend.run_manager.run_status import RunStatus
 
 @pytest.fixture
 def analysis_pipeline_instance(tmp_path):
-    manager = RunManager(
-        runs_root=tmp_path / "runs",
-    )
-
+    manager = RunManager(runs_root=tmp_path / "runs")
     return AnalysisPipeline(manager), manager
 
 
@@ -1008,6 +814,7 @@ def valid_pipeline_config(tmp_path):
 # Analysis Pipeline Construction Tests
 # =========================================================
 
+
 def test_analysis_pipeline_requires_run_manager():
     with pytest.raises(TypeError, match="RunManager"):
         AnalysisPipeline(object())
@@ -1016,6 +823,7 @@ def test_analysis_pipeline_requires_run_manager():
 # =========================================================
 # Successful Run Lifecycle Tests
 # =========================================================
+
 
 def test_analysis_pipeline_completes_run(
     analysis_pipeline_instance,
@@ -1092,9 +900,7 @@ def test_analysis_pipeline_uses_supplied_run_id(
     )
 
     assert result.run_id == "manual-pipeline-run"
-    assert manager.get_run(
-        "manual-pipeline-run"
-    ).status is RunStatus.COMPLETED
+    assert manager.get_run("manual-pipeline-run").status is RunStatus.COMPLETED
 
 
 def test_analysis_pipeline_generates_range_run_id(
@@ -1123,6 +929,7 @@ def test_analysis_pipeline_generates_range_run_id(
 # =========================================================
 # Failed Execution Lifecycle Tests
 # =========================================================
+
 
 def test_analysis_pipeline_marks_run_failed_when_stage_fails(
     analysis_pipeline_instance,
@@ -1188,9 +995,120 @@ def test_analysis_pipeline_marks_run_failed_on_executor_exception(
     assert stored_record.metadata.status == "FAILED"
 
 
+def test_analysis_pipeline_persists_stage_failure_details(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    def fake_execute(config, run_paths):
+        return PipelineExecutionResult(
+            run_id=run_paths.run_id,
+            status="failed",
+            stage_results=(
+                PipelineStageResult(
+                    stage_name="quality_analyzer",
+                    status="failed",
+                    started_at="2026-01-01T00:00:00",
+                    finished_at="2026-01-01T00:00:01",
+                    output_paths=(),
+                    warnings=("Some quality fields were unavailable",),
+                    errors=("Quality report generation failed",),
+                    summary={"processed_records": 10},
+                ),
+                PipelineStageResult(
+                    stage_name="synchronization_analyzer",
+                    status="skipped",
+                    started_at="2026-01-01T00:00:01",
+                    finished_at="2026-01-01T00:00:01",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        fake_execute,
+    )
+
+    result = pipeline.execute(valid_pipeline_config)
+
+    assert result.status == RunStatus.FAILED.value
+    assert result.execution is not None
+
+    stored_record = manager.get_run(result.run_id)
+
+    assert stored_record.status is RunStatus.FAILED
+    assert stored_record.metadata.status == "FAILED"
+    assert (
+        stored_record.metadata.failure_reason
+        == "quality_analyzer: Quality report generation failed"
+    )
+
+    execution_summary = stored_record.metadata.settings["execution_summary"]
+
+    assert execution_summary["status"] == "failed"
+    assert execution_summary["error"] is None
+    assert len(execution_summary["stages"]) == 2
+
+    failed_stage = execution_summary["stages"][0]
+
+    assert failed_stage["stage_name"] == "quality_analyzer"
+    assert failed_stage["status"] == "failed"
+    assert failed_stage["warnings"] == [
+        "Some quality fields were unavailable"
+    ]
+    assert failed_stage["errors"] == [
+        "Quality report generation failed"
+    ]
+
+    skipped_stage = execution_summary["stages"][1]
+
+    assert skipped_stage["stage_name"] == "synchronization_analyzer"
+    assert skipped_stage["status"] == "skipped"
+
+
+def test_analysis_pipeline_persists_executor_exception(
+    analysis_pipeline_instance,
+    valid_pipeline_config,
+    monkeypatch,
+):
+    pipeline, manager = analysis_pipeline_instance
+
+    def raise_executor_error(config, run_paths):
+        raise RuntimeError("unexpected executor error")
+
+    monkeypatch.setattr(
+        analysis_pipeline,
+        "execute_pipeline_stages",
+        raise_executor_error,
+    )
+
+    result = pipeline.execute(valid_pipeline_config)
+
+    assert result.status == RunStatus.FAILED.value
+    assert result.execution is None
+    assert result.error is not None
+    assert "unexpected executor error" in result.error
+
+    stored_record = manager.get_run(result.run_id)
+
+    assert stored_record.status is RunStatus.FAILED
+    assert stored_record.metadata.status == "FAILED"
+    assert stored_record.metadata.failure_reason == result.error
+
+    execution_summary = stored_record.metadata.settings["execution_summary"]
+
+    assert execution_summary["status"] == "failed"
+    assert execution_summary["error"] == result.error
+    assert execution_summary["stages"] == []
+
+
 # =========================================================
 # Validation and Run Creation Boundary Tests
 # =========================================================
+
 
 def test_analysis_pipeline_validates_before_creating_run(
     analysis_pipeline_instance,
@@ -1218,9 +1136,7 @@ def test_analysis_pipeline_requires_range_for_generated_run_id(
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
+    config = PipelineConfig(input_dir=input_dir)
 
     with pytest.raises(ValueError, match="start_sol and end_sol"):
         pipeline.execute(config)
@@ -1238,9 +1154,7 @@ def test_analysis_pipeline_allows_manual_id_without_sol_range(
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    config = PipelineConfig(
-        input_dir=input_dir,
-    )
+    config = PipelineConfig(input_dir=input_dir)
 
     monkeypatch.setattr(
         analysis_pipeline,
@@ -1259,14 +1173,13 @@ def test_analysis_pipeline_allows_manual_id_without_sol_range(
 
     assert result.status == RunStatus.COMPLETED.value
     assert result.run_id == "manual-no-sol-range"
-    assert manager.get_run(
-        result.run_id
-    ).metadata.start_sol is None
+    assert manager.get_run(result.run_id).metadata.start_sol is None
 
 
 # =========================================================
 # Executor Result Contract Tests
 # =========================================================
+
 
 def test_analysis_pipeline_rejects_non_result_from_executor(
     analysis_pipeline_instance,
@@ -1288,9 +1201,7 @@ def test_analysis_pipeline_rejects_non_result_from_executor(
     assert result.error is not None
     assert "PipelineExecutionResult" in result.error
 
-    assert manager.get_run(
-        result.run_id
-    ).status is RunStatus.FAILED
+    assert manager.get_run(result.run_id).status is RunStatus.FAILED
 
 
 def test_analysis_pipeline_rejects_mismatched_execution_run_id(
@@ -1317,9 +1228,7 @@ def test_analysis_pipeline_rejects_mismatched_execution_run_id(
     assert result.error is not None
     assert "does not match" in result.error
 
-    assert manager.get_run(
-        result.run_id
-    ).status is RunStatus.FAILED
+    assert manager.get_run(result.run_id).status is RunStatus.FAILED
 
 
 def test_pipeline_package_exports_public_api():

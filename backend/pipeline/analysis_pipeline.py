@@ -1,7 +1,9 @@
+
 """High-level orchestration for one MEDA analysis run.
 
 This module coordinates configuration validation, Run lifecycle
-management, and sequential pipeline execution.
+management, sequential pipeline execution, and persistence of execution
+failure details.
 
 It does not implement analyzer logic, background workers, GUI behavior,
 or scientific calculations.
@@ -63,6 +65,8 @@ class PipelineRunResult:
 class AnalysisPipeline:
     """Coordinate one validated, sequential MEDA analysis run."""
 
+    EXECUTION_SUMMARY_KEY = "execution_summary"
+
     def __init__(
         self,
         run_manager: RunManager,
@@ -97,6 +101,93 @@ class AnalysisPipeline:
             "integrity_values": config.integrity_values,
         }
 
+    @staticmethod
+    def _build_execution_summary(
+        execution: PipelineExecutionResult | None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a JSON-compatible summary of pipeline execution."""
+        if execution is None:
+            return {
+                "status": RunStatus.FAILED.value.lower(),
+                "error": error,
+                "stages": [],
+            }
+
+        stages: list[dict[str, Any]] = []
+
+        for stage in execution.stage_results:
+            stages.append({
+                "stage_name": stage.stage_name,
+                "status": stage.status,
+                "started_at": stage.started_at,
+                "finished_at": stage.finished_at,
+                "output_paths": [
+                    str(path)
+                    for path in stage.output_paths
+                ],
+                "warnings": list(stage.warnings),
+                "errors": list(stage.errors),
+            })
+
+        return {
+            "status": execution.status,
+            "error": error,
+            "stages": stages,
+        }
+
+    @staticmethod
+    def _build_failure_reason(
+        execution: PipelineExecutionResult | None,
+        error: str | None = None,
+    ) -> str:
+        """Build a concise operational failure reason."""
+        if error:
+            return error
+
+        if execution is not None:
+            for stage in execution.stage_results:
+                if stage.status == "failed":
+                    if stage.errors:
+                        return (
+                            f"{stage.stage_name}: "
+                            f"{stage.errors[0]}"
+                        )
+
+                    return (
+                        f"Pipeline stage failed: {stage.stage_name}"
+                    )
+
+            return (
+                "Pipeline execution ended with status "
+                f"{execution.status!r}."
+            )
+
+        return "Pipeline execution failed."
+
+    def _persist_failure_details(
+        self,
+        record: RunRecord,
+        execution: PipelineExecutionResult | None,
+        error: str | None = None,
+    ) -> None:
+        """Attach execution details before persisting FAILED status."""
+        metadata = record.metadata
+
+        updated_settings = dict(metadata.settings)
+        updated_settings[self.EXECUTION_SUMMARY_KEY] = (
+            self._build_execution_summary(
+                execution,
+                error,
+            )
+        )
+
+        metadata.settings = updated_settings
+        metadata.failure_reason = self._build_failure_reason(
+            execution,
+            error,
+        )
+
     def execute(
         self,
         config: PipelineConfig | Mapping[str, Any],
@@ -113,11 +204,12 @@ class AnalysisPipeline:
         A successfully created Run transitions through:
             PENDING -> RUNNING -> COMPLETED
 
-        If a pipeline stage fails, the Run transitions to FAILED.
+        If a pipeline stage fails, the Run transitions to FAILED and
+        its execution details are persisted in metadata.json.
 
         If an unexpected exception occurs during stage execution,
         the Run is marked FAILED and the exception is returned as
-        a structured error string.
+        a structured error string. The error is also persisted.
 
         A generated Run ID requires a configured SOL range, following
         the existing RunManager contract. A caller may provide run_id
@@ -136,6 +228,8 @@ class AnalysisPipeline:
         )
 
         record = self.run_manager.start_run(record.run_id)
+
+        execution: PipelineExecutionResult | None = None
 
         try:
             execution = execute_pipeline_stages(
@@ -159,10 +253,20 @@ class AnalysisPipeline:
                 record = self.run_manager.complete_run(
                     record.run_id
                 )
-            else:
-                record = self.run_manager.fail_run(
-                    record.run_id
+
+                return PipelineRunResult(
+                    record=record,
+                    execution=execution,
                 )
+
+            self._persist_failure_details(
+                record,
+                execution,
+            )
+
+            record = self.run_manager.fail_run(
+                record.run_id
+            )
 
             return PipelineRunResult(
                 record=record,
@@ -170,6 +274,14 @@ class AnalysisPipeline:
             )
 
         except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+
+            self._persist_failure_details(
+                record,
+                execution,
+                error,
+            )
+
             record = self.run_manager.fail_run(
                 record.run_id
             )
@@ -177,5 +289,5 @@ class AnalysisPipeline:
             return PipelineRunResult(
                 record=record,
                 execution=None,
-                error=f"{type(exc).__name__}: {exc}",
+                error=error,
             )
