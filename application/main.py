@@ -1,5 +1,5 @@
 
-"""Application entry point for the MDRPA desktop application."""
+"""Application entry point and composition root for MDRPA."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from collections.abc import Sequence
 
 from PySide6.QtWidgets import QApplication
 
+from application.analysis_controller import AnalysisController
 from application.app_config import AppConfig
 from application.app_paths import AppPaths
 from application.version import (
@@ -15,6 +16,8 @@ from application.version import (
     APP_SHORT_NAME,
     ORGANIZATION_NAME,
 )
+from backend.pipeline.analysis_pipeline import AnalysisPipeline
+from backend.run_manager.run_manager import RunManager
 from gui.main_window.main_window import MainWindow
 
 
@@ -45,11 +48,29 @@ def create_application(
 def create_main_window(
     paths: AppPaths | None = None,
 ) -> MainWindow:
-    """Create the main window using persistent application settings."""
-    resolved_paths = paths if paths is not None else AppPaths.from_system()
-    config = AppConfig(resolved_paths)
+    """Compose application services and create the main window."""
+    resolved_paths = (
+        paths
+        if paths is not None
+        else AppPaths.from_system()
+    )
 
-    return MainWindow(config)
+    config = AppConfig(resolved_paths)
+    window = MainWindow(config)
+
+    run_manager = RunManager(
+        runs_root=resolved_paths.runs_dir,
+    )
+    pipeline = AnalysisPipeline(run_manager)
+
+    controller = AnalysisController(
+        pipeline,
+        parent=window,
+    )
+
+    window.attach_analysis_controller(controller)
+
+    return window
 
 
 def main(

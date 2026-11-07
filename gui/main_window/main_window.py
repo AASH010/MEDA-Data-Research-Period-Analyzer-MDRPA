@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from application.analysis_controller import AnalysisController
 from application.app_config import AppConfig
 from application.version import APP_NAME
 from gui.main_window.menu_bar import MainMenuBar
@@ -25,7 +26,7 @@ __all__ = ["MainWindow"]
 
 
 class MainWindow(QMainWindow):
-    """Provide the application shell, navigation, and persistent window state."""
+    """Provide the application shell, navigation, and service ownership."""
 
     DEFAULT_WIDTH = 1100
     DEFAULT_HEIGHT = 760
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
 
         self.config = config
         self._pages: dict[str, QWidget] = {}
+        self._analysis_controller: AnalysisController | None = None
 
         self.setObjectName("main_window")
         self.setWindowTitle(APP_NAME)
@@ -64,6 +66,34 @@ class MainWindow(QMainWindow):
         self._build_status_bar()
         self._build_central_widget()
         self._restore_window_state()
+
+    @property
+    def analysis_controller(self) -> AnalysisController | None:
+        """Return the application analysis controller, if attached."""
+        return self._analysis_controller
+
+    def attach_analysis_controller(
+        self,
+        controller: AnalysisController,
+    ) -> None:
+        """Attach the controller owned by this main window."""
+        if not isinstance(controller, AnalysisController):
+            raise TypeError(
+                "controller must be an AnalysisController instance."
+            )
+
+        if controller.parent() is not self:
+            raise ValueError(
+                "analysis controller must have this MainWindow "
+                "as its QObject parent."
+            )
+
+        if self._analysis_controller is not None:
+            raise RuntimeError(
+                "An analysis controller is already attached."
+            )
+
+        self._analysis_controller = controller
 
     def _build_menu_bar(self) -> None:
         """Create and install the application menu bar."""
