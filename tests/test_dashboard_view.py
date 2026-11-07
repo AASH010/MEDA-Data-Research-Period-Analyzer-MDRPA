@@ -53,6 +53,43 @@ def create_completed_run(
     return manager.complete_run(record.run_id)
 
 
+def write_range_summaries(
+    record,
+    full_start: int = 100,
+    full_end: int = 110,
+    selected_start: int = 103,
+    selected_end: int = 107,
+) -> None:
+    output_dir = record.paths.output_dir
+
+    (output_dir / "coverage_summary.json").write_text(
+        json.dumps({
+            "start_sol": full_start,
+            "end_sol": full_end,
+        }),
+        encoding="utf-8",
+    )
+
+    (output_dir / "coverage_range_summary.json").write_text(
+        json.dumps({
+            "start_sol": selected_start,
+            "end_sol": selected_end,
+        }),
+        encoding="utf-8",
+    )
+
+
+def select_run(dashboard, run_id: str) -> None:
+    for row in range(dashboard.run_table.rowCount()):
+        item = dashboard.run_table.item(row, 0)
+
+        if item.data(256) == run_id:
+            dashboard.run_table.selectRow(row)
+            return
+
+    raise AssertionError(f"Run not found: {run_id}")
+
+
 def test_dashboard_starts_without_run_manager(dashboard):
     assert dashboard.run_manager is None
     assert dashboard.run_table.rowCount() == 0
@@ -271,6 +308,255 @@ def test_dashboard_displays_execution_summary_from_metadata(
     assert "test failure" in dashboard.run_details_label.text()
 
 
+def test_dashboard_shows_selected_range_for_partial_range(
+    dashboard,
+    run_manager,
+):
+    record = create_completed_run(
+        run_manager,
+        "dashboard-partial-range",
+    )
+    write_range_summaries(record)
+
+    dashboard.set_run_manager(run_manager)
+
+    tab_names = [
+        dashboard.analysis_tabs.tabText(index)
+        for index in range(dashboard.analysis_tabs.count())
+    ]
+
+    assert "Full Dataset" in tab_names
+    assert "Selected Range" in tab_names
+
+
+def test_dashboard_hides_selected_range_for_full_range(
+    dashboard,
+    run_manager,
+):
+    record = create_completed_run(
+        run_manager,
+        "dashboard-full-range",
+    )
+    write_range_summaries(
+        record,
+        selected_start=100,
+        selected_end=110,
+    )
+
+    dashboard.set_run_manager(run_manager)
+
+    tab_names = [
+        dashboard.analysis_tabs.tabText(index)
+        for index in range(dashboard.analysis_tabs.count())
+    ]
+
+    assert "Full Dataset" in tab_names
+    assert "Selected Range" not in tab_names
+
+
+def test_dashboard_restores_selected_range_tab(
+    dashboard,
+    run_manager,
+):
+    partial = create_completed_run(
+        run_manager,
+        "dashboard-partial",
+    )
+    full = create_completed_run(
+        run_manager,
+        "dashboard-full",
+    )
+
+    write_range_summaries(partial)
+    write_range_summaries(
+        full,
+        selected_start=100,
+        selected_end=110,
+    )
+
+    dashboard.set_run_manager(run_manager)
+
+    select_run(dashboard, full.run_id)
+
+    assert dashboard.analysis_tabs.indexOf(
+        dashboard._selected_range_page
+    ) == -1
+
+    select_run(dashboard, partial.run_id)
+
+    assert dashboard.analysis_tabs.indexOf(
+        dashboard._selected_range_page
+    ) >= 0
+
+
+def test_dashboard_hides_selected_range_when_range_metadata_is_invalid(
+    dashboard,
+    run_manager,
+):
+    record = create_completed_run(
+        run_manager,
+        "dashboard-invalid-range",
+    )
+
+    output_dir = record.paths.output_dir
+
+    (output_dir / "coverage_summary.json").write_text(
+        json.dumps({
+            "start_sol": 100,
+            "end_sol": 110,
+        }),
+        encoding="utf-8",
+    )
+
+    (output_dir / "coverage_range_summary.json").write_text(
+        json.dumps({
+            "start_sol": "invalid",
+            "end_sol": 107,
+        }),
+        encoding="utf-8",
+    )
+
+    dashboard.set_run_manager(run_manager)
+
+    assert dashboard.analysis_tabs.indexOf(
+        dashboard._selected_range_page
+    ) == -1
+
+
+def test_dashboard_loads_full_and_selected_artifacts_separately(
+    dashboard,
+    run_manager,
+    monkeypatch,
+):
+    record = create_completed_run(
+        run_manager,
+        "dashboard-separate-artifacts",
+    )
+    write_range_summaries(record)
+
+    calls = {}
+
+    def capture_coverage(path):
+        calls.setdefault("coverage", []).append(path)
+
+    def capture_quality(summary_path, report_path=None):
+        calls.setdefault("quality", []).append(
+            (summary_path, report_path)
+        )
+        return True
+
+    def capture_synchronization(
+        summary_path,
+        file_report_path=None,
+        pair_report_path=None,
+    ):
+        calls.setdefault("synchronization", []).append(
+            (
+                summary_path,
+                file_report_path,
+                pair_report_path,
+            )
+        )
+        return True
+
+    def capture_ranking(summary_path, ranking_report_path=None):
+        calls.setdefault("ranking", []).append(
+            (summary_path, ranking_report_path)
+        )
+        return True
+
+    monkeypatch.setattr(
+        dashboard.coverage_dashboard,
+        "load_summary_file",
+        capture_coverage,
+    )
+    monkeypatch.setattr(
+        dashboard._coverage_range_dashboard,
+        "load_summary_file",
+        capture_coverage,
+    )
+
+    for widget in (
+        dashboard.quality_dashboard,
+        dashboard._quality_range_dashboard,
+    ):
+        monkeypatch.setattr(
+            widget,
+            "load_artifacts",
+            capture_quality,
+        )
+
+    for widget in (
+        dashboard.synchronization_dashboard,
+        dashboard._synchronization_range_dashboard,
+    ):
+        monkeypatch.setattr(
+            widget,
+            "load_artifacts",
+            capture_synchronization,
+        )
+
+    for widget in (
+        dashboard.ranking_dashboard,
+        dashboard._ranking_range_dashboard,
+    ):
+        monkeypatch.setattr(
+            widget,
+            "load_artifacts",
+            capture_ranking,
+        )
+
+    dashboard.set_run_manager(run_manager)
+
+    output_dir = record.paths.output_dir
+
+    assert calls["coverage"] == [
+        output_dir / "coverage_summary.json",
+        output_dir / "coverage_range_summary.json",
+    ]
+
+    assert calls["quality"][0][0] == (
+        output_dir / "quality_summary.json"
+    )
+    assert calls["quality"][1][0] == (
+        output_dir / "quality_range_summary.json"
+    )
+
+    # Detailed quality reports remain unfiltered.
+    assert calls["quality"][0][1] == (
+        output_dir / "quality_field_report.csv"
+    )
+    assert calls["quality"][1][1] == (
+        output_dir / "quality_field_report.csv"
+    )
+
+    assert calls["synchronization"][0][0] == (
+        output_dir / "synchronization_summary.json"
+    )
+    assert calls["synchronization"][1][0] == (
+        output_dir / "synchronization_range_summary.json"
+    )
+
+    # Detailed synchronization reports remain unfiltered.
+    assert calls["synchronization"][0][1:] == (
+        output_dir / "synchronization_file_report.csv",
+        output_dir / "synchronization_pair_report.csv",
+    )
+    assert calls["synchronization"][1][1:] == (
+        output_dir / "synchronization_file_report.csv",
+        output_dir / "synchronization_pair_report.csv",
+    )
+
+    assert calls["ranking"][0] == (
+        output_dir / "period_ranking_full_summary.json",
+        output_dir / "period_ranking_full.csv",
+    )
+    assert calls["ranking"][1] == (
+        output_dir / "period_ranking_summary.json",
+        output_dir / "period_ranking.csv",
+    )
+
+
 def test_clear_analysis_dashboards_calls_explicit_resets(
     dashboard,
     monkeypatch,
@@ -282,35 +568,28 @@ def test_clear_analysis_dashboards_calls_explicit_resets(
         dashboard.quality_dashboard,
         dashboard.synchronization_dashboard,
         dashboard.ranking_dashboard,
+        dashboard._coverage_range_dashboard,
+        dashboard._quality_range_dashboard,
+        dashboard._synchronization_range_dashboard,
+        dashboard._ranking_range_dashboard,
     )
 
-    for widget in widgets:
+    for index, widget in enumerate(widgets):
         original_reset = widget.reset
 
         def tracked_reset(
             original=original_reset,
-            name=type(widget).__name__,
+            widget_index=index,
         ):
-            reset_calls.append(name)
+            reset_calls.append(widget_index)
             original()
 
         monkeypatch.setattr(widget, "reset", tracked_reset)
 
     dashboard._clear_analysis_dashboards()
 
-    assert reset_calls == [
-        "CoverageDashboard",
-        "QualityDashboard",
-        "SynchronizationDashboard",
-        "RankingDashboard",
-    ]
+    assert reset_calls == list(range(8))
 
-    assert dashboard.coverage_dashboard.summary_path is None
-    assert dashboard.quality_dashboard.summary_path is None
-    assert dashboard.synchronization_dashboard.summary_path is None
-    assert dashboard.ranking_dashboard.summary_path is None
-
-    assert dashboard.coverage_dashboard.summary is None
-    assert dashboard.quality_dashboard.summary is None
-    assert dashboard.synchronization_dashboard.summary is None
-    assert dashboard.ranking_dashboard.summary is None
+    for widget in widgets:
+        assert widget.summary_path is None
+        assert widget.summary is None

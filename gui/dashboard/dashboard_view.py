@@ -225,7 +225,9 @@ class DashboardView(QWidget):
             self._synchronization_range_dashboard,
             self._ranking_range_dashboard,
         ) = self._create_analysis_page(details_group)
+
         self._selected_range_page = selected_page
+
         self.analysis_tabs = QTabWidget(details_group)
         self.analysis_tabs.setObjectName("dashboard_analysis_tabs")
         self.analysis_tabs.addTab(self.summary_text, "Run Summary")
@@ -304,19 +306,19 @@ class DashboardView(QWidget):
         for dashboard in dashboards:
             dashboard.reset()
 
-def _set_selected_range_tab_visible(self, visible: bool) -> None:
-    """Show Selected Range only when it represents a partial range."""
-    selected_page = self._selected_range_page
-    selected_index = self.analysis_tabs.indexOf(selected_page)
+    def _set_selected_range_tab_visible(self, visible: bool) -> None:
+        """Show Selected Range only when it represents a partial range."""
+        selected_page = self._selected_range_page
+        selected_index = self.analysis_tabs.indexOf(selected_page)
 
-    if visible:
-        if selected_index < 0:
-            self.analysis_tabs.addTab(
-                selected_page,
-                "Selected Range",
-            )
-    elif selected_index >= 0:
-        self.analysis_tabs.removeTab(selected_index)
+        if visible:
+            if selected_index < 0:
+                self.analysis_tabs.addTab(
+                    selected_page,
+                    "Selected Range",
+                )
+        elif selected_index >= 0:
+            self.analysis_tabs.removeTab(selected_index)
 
     @staticmethod
     def _format_sol_range(record: RunRecord) -> str:
@@ -420,8 +422,13 @@ def _set_selected_range_tab_visible(self, visible: bool) -> None:
         if selected_row is None:
             selected_row = 0
 
+
+        self.run_table.blockSignals(True)
         self.run_table.selectRow(selected_row)
+        self.run_table.blockSignals(False)
+
         self._display_selected_run()
+
 
     def _handle_selection_changed(self) -> None:
         self._display_selected_run()
