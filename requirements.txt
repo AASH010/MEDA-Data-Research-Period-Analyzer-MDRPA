@@ -1,20 +1,22 @@
-# MEDA Research Tool - Python Dependencies
+
+# MEDA Research Tool - Runtime Dependencies
+# Supported Python versions: 3.10 and 3.11
 
 # Desktop GUI
-PySide6
+PySide6>=6.12,<7.0
 
 # Interactive charts and data visualization
-pyqtgraph
+pyqtgraph>=0.14,<0.15
 
 # Numerical and scientific data processing
-numpy
-pandas
+numpy>=2.2,<3.0
+pandas>=2.3,<4.0
 
 # Configuration file support
-PyYAML
+PyYAML>=6.0,<7.0
 
 # Date and time utilities
-python-dateutil
+python-dateutil>=3.0,<5.0
 
 # XML processing
-lxml
+lxml>=6.0,<7.0
