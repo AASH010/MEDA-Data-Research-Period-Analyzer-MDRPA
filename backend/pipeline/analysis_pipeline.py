@@ -3,7 +3,7 @@
 
 This module coordinates configuration validation, Run lifecycle
 management, sequential pipeline execution, cooperative cancellation,
-and persistence of execution details.
+execution event forwarding, and persistence of execution details.
 
 It does not implement analyzer logic, background workers, GUI behavior,
 or scientific calculations.
@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import Event
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from backend.pipeline.pipeline_executor import (
     PipelineExecutionResult,
+    PipelineStageResult,
     execute_pipeline_stages,
 )
 from backend.pipeline.pipeline_validator import (
@@ -207,6 +208,16 @@ class AnalysisPipeline:
             error,
         )
 
+    @staticmethod
+    def _validate_callback(
+        callback: Callable | None,
+        name: str,
+    ) -> None:
+        if callback is not None and not callable(callback):
+            raise TypeError(
+                f"{name} must be callable or None."
+            )
+
     def execute(
         self,
         config: PipelineConfig | Mapping[str, Any],
@@ -216,11 +227,23 @@ class AnalysisPipeline:
         source_info: Mapping[str, Any] | None = None,
         application_version: str | None = None,
         cancel_event: Event | None = None,
+        on_stage_started: Callable[[str], None] | None = None,
+        on_stage_completed: Callable[
+            [PipelineStageResult], None
+        ] | None = None,
+        on_progress_updated: Callable[
+            [int, str], None
+        ] | None = None,
     ) -> PipelineRunResult:
         """Validate, create, and execute one analysis Run.
 
-        Configuration and cancellation-token validation occur before
-        Run creation.
+        Optional event callbacks are forwarded to the pipeline executor.
+
+        Callback exceptions are isolated by the executor and do not
+        change Run lifecycle or analyzer results.
+
+        Configuration, cancellation-token, and callback validation
+        occur before Run creation.
 
         A successful Run transitions through:
             PENDING -> RUNNING -> COMPLETED
@@ -250,6 +273,19 @@ class AnalysisPipeline:
                 "cancel_event must be a threading.Event instance or None."
             )
 
+        self._validate_callback(
+            on_stage_started,
+            "on_stage_started",
+        )
+        self._validate_callback(
+            on_stage_completed,
+            "on_stage_completed",
+        )
+        self._validate_callback(
+            on_progress_updated,
+            "on_progress_updated",
+        )
+
         validated_config = validate_pipeline_config(config)
 
         record = self.run_manager.create_run(
@@ -268,18 +304,51 @@ class AnalysisPipeline:
 
         try:
             # Preserve backward compatibility with existing callers,
-            # tests, and integrations that use the original two-argument
-            # executor call.
-            if cancel_event is None:
+            # tests, and integrations that use the original executor
+            # call when no optional features are requested.
+            executor_callbacks = {}
+
+            if on_stage_started is not None:
+                executor_callbacks["on_stage_started"] = (
+                    on_stage_started
+                )
+
+            if on_stage_completed is not None:
+                executor_callbacks["on_stage_completed"] = (
+                    on_stage_completed
+                )
+
+            if on_progress_updated is not None:
+                executor_callbacks["on_progress_updated"] = (
+                    on_progress_updated
+                )
+
+            if cancel_event is None and not executor_callbacks:
                 execution = execute_pipeline_stages(
                     validated_config,
                     record.paths,
                 )
+
+            elif cancel_event is None:
+                execution = execute_pipeline_stages(
+                    validated_config,
+                    record.paths,
+                    **executor_callbacks,
+                )
+
+            elif not executor_callbacks:
+                execution = execute_pipeline_stages(
+                    validated_config,
+                    record.paths,
+                    cancel_event=cancel_event,
+                )
+
             else:
                 execution = execute_pipeline_stages(
                     validated_config,
                     record.paths,
                     cancel_event=cancel_event,
+                    **executor_callbacks,
                 )
 
             if not isinstance(execution, PipelineExecutionResult):

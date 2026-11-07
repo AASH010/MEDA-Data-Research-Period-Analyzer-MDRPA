@@ -1,8 +1,9 @@
 
 """Sequential execution of the MEDA analysis pipeline stages.
 
-This module adapts the existing analyzers to one isolated RunPaths output
-directory. It supports cooperative cancellation at safe stage boundaries.
+This module adapts existing analyzers to one isolated RunPaths output
+directory. It supports cooperative cancellation and optional execution
+event callbacks.
 
 It does not manage Run lifecycle status, create background workers,
 or change scientific analyzer logic.
@@ -34,6 +35,11 @@ __all__ = [
     "PipelineExecutionResult",
     "execute_pipeline_stages",
 ]
+
+
+StageStartedCallback = Callable[[str], None]
+StageCompletedCallback = Callable[["PipelineStageResult"], None]
+ProgressCallback = Callable[[int, str], None]
 
 
 @dataclass(frozen=True)
@@ -79,6 +85,34 @@ _STAGE_NAMES = (
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _notify(
+    callback: Callable | None,
+    *args: Any,
+) -> None:
+    """Notify an observer without allowing it to affect execution.
+
+    Callback exceptions are intentionally isolated. Monitoring or UI
+    notification failures must not change analyzer execution results.
+    """
+    if callback is None:
+        return
+
+    try:
+        callback(*args)
+    except Exception:
+        pass
+
+
+def _validate_callback(
+    callback: Callable | None,
+    name: str,
+) -> None:
+    if callback is not None and not callable(callback):
+        raise TypeError(
+            f"{name} must be callable or None."
+        )
 
 
 def _output_path(output_dir: Path, filename: str) -> Path:
@@ -256,8 +290,25 @@ def execute_pipeline_stages(
     run_paths: RunPaths,
     *,
     cancel_event: Event | None = None,
+    on_stage_started: StageStartedCallback | None = None,
+    on_stage_completed: StageCompletedCallback | None = None,
+    on_progress_updated: ProgressCallback | None = None,
 ) -> PipelineExecutionResult:
     """Execute analyzers sequentially for one isolated run.
+
+    Optional callbacks report actual stage lifecycle events:
+
+    - on_stage_started(stage_name): called immediately before an
+      analyzer stage starts.
+    - on_stage_completed(stage_result): called when a stage result is
+      recorded, including failed, skipped, and cancelled stages.
+    - on_progress_updated(percentage, message): called after each
+      stage result is recorded. Percentage is based on the six
+      pipeline stages, not elapsed time.
+
+    Stages marked skipped or cancelled are not reported as started.
+
+    Callback exceptions are isolated and do not alter pipeline results.
 
     A stage failure immediately stops execution of all remaining stages.
 
@@ -269,6 +320,19 @@ def execute_pipeline_stages(
 
     Run lifecycle status is managed by AnalysisPipeline.
     """
+    _validate_callback(
+        on_stage_started,
+        "on_stage_started",
+    )
+    _validate_callback(
+        on_stage_completed,
+        "on_stage_completed",
+    )
+    _validate_callback(
+        on_progress_updated,
+        "on_progress_updated",
+    )
+
     input_dir, output_dir = _validate_execution_inputs(
         config,
         run_paths,
@@ -324,6 +388,27 @@ def execute_pipeline_stages(
 
     stage_results: list[PipelineStageResult] = []
 
+    def record_stage_result(
+        result: PipelineStageResult,
+    ) -> None:
+        """Store a stage result and notify observers."""
+        stage_results.append(result)
+
+        _notify(
+            on_stage_completed,
+            result,
+        )
+
+        percentage = round(
+            len(stage_results) / len(_STAGE_NAMES) * 100
+        )
+
+        _notify(
+            on_progress_updated,
+            percentage,
+            f"{result.stage_name}: {result.status}",
+        )
+
     def build_execution_result() -> PipelineExecutionResult:
         statuses = {
             result.status
@@ -348,9 +433,9 @@ def execute_pipeline_stages(
     def record_cancelled_stages(
         first_stage_index: int,
     ) -> None:
-        """Mark the current and all remaining stages as cancelled."""
+        """Record the current and all remaining stages as cancelled."""
         for remaining_stage in _STAGE_NAMES[first_stage_index:]:
-            stage_results.append(
+            record_stage_result(
                 _cancelled_stage(remaining_stage)
             )
 
@@ -369,12 +454,17 @@ def execute_pipeline_stages(
             record_cancelled_stages(stage_index)
             return False
 
+        _notify(
+            on_stage_started,
+            stage_name,
+        )
+
         result = _execute_one_stage(
             stage_name,
             operation,
         )
 
-        stage_results.append(result)
+        record_stage_result(result)
 
         # A real stage failure takes precedence over a simultaneous
         # cancellation request. Remaining stages are skipped because
@@ -383,7 +473,7 @@ def execute_pipeline_stages(
             failed_index = stage_index + 1
 
             for remaining_stage in _STAGE_NAMES[failed_index:]:
-                stage_results.append(
+                record_stage_result(
                     _skipped_stage(remaining_stage)
                 )
 
