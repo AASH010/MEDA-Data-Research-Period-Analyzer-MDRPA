@@ -231,6 +231,8 @@ def test_status_bar_starts_with_ready_message(qapp):
     assert status_bar.currentMessage() == "Ready"
 
 
+
+
 def test_main_returns_application_exit_code(monkeypatch):
     fake_application = Mock()
     fake_application.exec.return_value = 17
@@ -250,4 +252,5 @@ def test_main_returns_application_exit_code(monkeypatch):
 
     assert result == 17
     fake_window.show.assert_called_once_with()
+    fake_window.show_first_launch_tutorial.assert_called_once_with()
     fake_application.exec.assert_called_once_with()

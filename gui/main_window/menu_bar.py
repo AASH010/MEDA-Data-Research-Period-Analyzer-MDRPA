@@ -1,3 +1,4 @@
+
 """Main application menu bar."""
 
 from __future__ import annotations
@@ -51,6 +52,13 @@ class MainMenuBar(QMenuBar):
         )
         self.help_action.triggered.connect(self._show_help)
 
+        self.tutorial_action = QAction("&First-Launch Tutorial", self)
+        self.tutorial_action.setObjectName("action_tutorial")
+        self.tutorial_action.setStatusTip(
+            "Open the application walkthrough."
+        )
+        self.tutorial_action.triggered.connect(self._show_tutorial)
+
         self.about_action = QAction("&About", self)
         self.about_action.setObjectName("action_about")
         self.about_action.setStatusTip(
@@ -66,6 +74,7 @@ class MainMenuBar(QMenuBar):
         self.credits_action.triggered.connect(self._show_credits)
 
         self.help_menu.addAction(self.help_action)
+        self.help_menu.addAction(self.tutorial_action)
         self.help_menu.addSeparator()
         self.help_menu.addAction(self.about_action)
         self.help_menu.addAction(self.credits_action)
@@ -74,6 +83,10 @@ class MainMenuBar(QMenuBar):
         """Display the user guide."""
         dialog = HelpDialog(self.main_window)
         dialog.exec()
+
+    def _show_tutorial(self) -> None:
+        """Open the tutorial from the Help menu."""
+        self.main_window.show_tutorial()
 
     def _show_about(self) -> None:
         """Display application identity information."""

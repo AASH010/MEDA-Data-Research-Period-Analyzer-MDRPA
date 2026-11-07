@@ -18,6 +18,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "window/width": 1100,
     "window/height": 760,
     "window/maximized": False,
+    "tutorial/completed": False,
 }
 
 

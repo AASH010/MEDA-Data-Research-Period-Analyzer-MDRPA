@@ -82,7 +82,8 @@ def main(
     # Qt application identity is configured before resolving AppDataLocation.
     window = create_main_window()
     window.show()
-
+    window.show_first_launch_tutorial()
+    
     return application.exec()
 
 

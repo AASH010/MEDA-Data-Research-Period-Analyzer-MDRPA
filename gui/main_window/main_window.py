@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.dialogs.tutorial_dialog import TutorialDialog
 from application.analysis_controller import AnalysisController
 from application.app_config import AppConfig
 from application.version import APP_NAME
@@ -718,3 +719,27 @@ class MainWindow(QMainWindow):
             )
 
         super().closeEvent(event)
+
+    def show_tutorial(self) -> None:
+        """Open the tutorial on demand and persist its completion."""
+        dialog = TutorialDialog(self)
+
+        dialog.completed.connect(
+            lambda: self.config.set("tutorial/completed", True)
+        )
+        dialog.skipped.connect(
+            lambda: self.config.set("tutorial/completed", True)
+        )
+
+        dialog.exec()
+
+    def show_first_launch_tutorial(self) -> None:
+        """Show the tutorial only if it has not been completed."""
+        completed = self.config.get(
+            "tutorial/completed",
+            False,
+            bool,
+        )
+
+        if not completed:
+            self.show_tutorial()
