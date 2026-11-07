@@ -55,6 +55,9 @@ class MainWindow(QMainWindow):
         self._pages: dict[str, QWidget] = {}
         self._analysis_controller: AnalysisController | None = None
 
+        self._shutdown_pending = False
+        self._allow_close = False
+
         self.setObjectName("main_window")
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(
@@ -94,6 +97,57 @@ class MainWindow(QMainWindow):
             )
 
         self._analysis_controller = controller
+        self._connect_analysis_controller(controller)
+
+    def _connect_analysis_controller(
+        self,
+        controller: AnalysisController,
+    ) -> None:
+        """Connect controller events to the application status bar."""
+        controller.started.connect(
+            self.application_status_bar.analysis_started
+        )
+
+        controller.stage_started.connect(
+            self.application_status_bar.stage_started
+        )
+
+        controller.stage_completed.connect(
+            self.application_status_bar.stage_completed
+        )
+
+        controller.progress_updated.connect(
+            self.application_status_bar.update_progress
+        )
+
+        controller.warning_occurred.connect(
+            self.application_status_bar.show_warning
+        )
+
+        controller.error_occurred.connect(
+            self.application_status_bar.show_error
+        )
+
+        controller.finished.connect(
+            self.application_status_bar.analysis_finished
+        )
+
+        controller.cancelled.connect(
+            self.application_status_bar.analysis_cancelled
+        )
+
+        controller.thread_finished.connect(
+            self._handle_analysis_thread_finished
+        )
+
+    def _handle_analysis_thread_finished(self) -> None:
+        """Complete a pending window close after the worker thread stops."""
+        if not self._shutdown_pending:
+            return
+
+        self._shutdown_pending = False
+        self._allow_close = True
+        self.close()
 
     def _build_menu_bar(self) -> None:
         """Create and install the application menu bar."""
@@ -135,7 +189,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        # Initialize the first page without changing the initial Ready status.
         self.page_stack.setCurrentWidget(self._pages["home"])
         self.navigation_sidebar.set_current_page("home")
 
@@ -240,7 +293,34 @@ class MainWindow(QMainWindow):
         self.config.set("window/maximized", maximized)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Save window preferences before closing."""
+        """Wait for active analysis to stop before closing the window."""
+        if self._allow_close:
+            self._save_and_accept_close(event)
+            return
+
+        controller = self._analysis_controller
+
+        if controller is not None and controller.is_active:
+            event.ignore()
+
+            if not self._shutdown_pending:
+                self._shutdown_pending = True
+                self.application_status_bar.shutdown_pending()
+
+                # The controller emits this only after QThread has stopped
+                # and its internal references have been cleared.
+                if controller.is_running:
+                    controller.request_cancel()
+
+            return
+
+        self._save_and_accept_close(event)
+
+    def _save_and_accept_close(
+        self,
+        event: QCloseEvent,
+    ) -> None:
+        """Save window preferences and accept the close event."""
         try:
             self._save_window_state()
         except OSError:
