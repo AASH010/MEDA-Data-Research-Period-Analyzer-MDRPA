@@ -1,3 +1,4 @@
+
 """Read-only visualization of persisted MEDA candidate period rankings."""
 
 from __future__ import annotations
@@ -105,6 +106,16 @@ class RankingDashboard(QWidget):
     def ranking_rows(self) -> list[dict[str, str]]:
         """Return a copy of the loaded ranking report rows."""
         return list(self._ranking_rows)
+
+    def reset(self) -> None:
+        """Clear all Run-specific data and restore unavailable states."""
+        self._summary_path = None
+        self._ranking_report_path = None
+        self._ranking_rows = []
+
+        self._show_unavailable(
+            "Period ranking summary is not available."
+        )
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)

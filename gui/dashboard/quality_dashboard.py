@@ -305,6 +305,21 @@ class QualityDashboard(QWidget):
         self._display_summary(summary)
         return True
 
+    def reset(self) -> None:
+        """Clear all Run-specific data and restore unavailable states."""
+        self._summary = None
+        self._summary_path = None
+        self._report_path = None
+        self._report_rows = []
+
+        self._clear_summary_display()
+        self._populate_report_table()
+
+        self.report_status_label.setText(
+            "Field report is not available."
+        )
+        self._show_unavailable("Quality summary is not available.")
+
     def load_summary_file(self, path: str | Path) -> bool:
         """Load a persisted quality summary JSON file."""
         summary_path = Path(path)

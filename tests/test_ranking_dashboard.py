@@ -1,3 +1,4 @@
+
 """Tests for the read-only MEDA Ranking Dashboard."""
 
 from __future__ import annotations
@@ -521,3 +522,93 @@ def test_summary_rejects_invalid_sol_range(
 
     assert dashboard.set_summary(payload) is False
     assert dashboard.summary is None
+
+
+def test_reset_clears_all_run_specific_state(
+    dashboard,
+    ranking_summary,
+    ranking_rows,
+    tmp_path,
+):
+    summary_path = tmp_path / "period_ranking_summary.json"
+    report_path = tmp_path / "period_ranking.csv"
+
+    summary_path.write_text(
+        json.dumps(ranking_summary),
+        encoding="utf-8",
+    )
+    write_csv(
+        report_path,
+        dashboard.RANKING_SOURCE_COLUMNS,
+        ranking_rows,
+    )
+
+    assert dashboard.load_artifacts(summary_path, report_path) is True
+
+    assert dashboard.summary is not None
+    assert dashboard.summary_path == summary_path
+    assert dashboard.ranking_report_path == report_path
+    assert len(dashboard.ranking_rows) == 3
+    assert dashboard.ranking_table.rowCount() == 3
+    assert dashboard.summary_text.toPlainText()
+
+    score_bars_before = [
+        item
+        for item in dashboard.score_chart.getPlotItem().items
+        if isinstance(item, pg.BarGraphItem)
+    ]
+    status_bars_before = [
+        item
+        for item in dashboard.status_chart.getPlotItem().items
+        if isinstance(item, pg.BarGraphItem)
+    ]
+
+    assert len(score_bars_before) == 1
+    assert len(status_bars_before) == 1
+
+    dashboard.reset()
+
+    assert dashboard.summary is None
+    assert dashboard.summary_path is None
+    assert dashboard.ranking_report_path is None
+    assert dashboard.ranking_rows == []
+
+    assert dashboard.ranking_table.rowCount() == 0
+    assert dashboard.total_windows_label.text() == (
+        "Candidate Windows: Not available"
+    )
+    assert dashboard.rankable_windows_label.text() == (
+        "Rankable Windows: Not available"
+    )
+    assert dashboard.unrankable_windows_label.text() == (
+        "Unrankable Windows: Not available"
+    )
+    assert dashboard.comparison_groups_label.text() == (
+        "Comparison Groups: Not available"
+    )
+    assert dashboard.sol_range_label.text() == (
+        "SOL Range: Not available"
+    )
+    assert dashboard.window_size_label.text() == (
+        "Window Size: Not available"
+    )
+
+    assert dashboard.summary_text.toPlainText() == ""
+    assert "not available" in dashboard.status_label.text().lower()
+    assert "not available" in (
+        dashboard.report_status_label.text().lower()
+    )
+
+    score_bars_after = [
+        item
+        for item in dashboard.score_chart.getPlotItem().items
+        if isinstance(item, pg.BarGraphItem)
+    ]
+    status_bars_after = [
+        item
+        for item in dashboard.status_chart.getPlotItem().items
+        if isinstance(item, pg.BarGraphItem)
+    ]
+
+    assert score_bars_after == []
+    assert status_bars_after == []

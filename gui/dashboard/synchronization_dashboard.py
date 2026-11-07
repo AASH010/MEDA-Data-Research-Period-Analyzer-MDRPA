@@ -1,4 +1,3 @@
-
 """Read-only visualization of persisted MEDA synchronization reports."""
 
 from __future__ import annotations
@@ -472,6 +471,41 @@ class SynchronizationDashboard(QWidget):
     def _format_text(value: Any) -> str:
         text = str(value or "").strip()
         return text if text else "Not available"
+
+    def reset(self) -> None:
+        """Clear all Run-specific data and restore unavailable states."""
+        self._summary = None
+        self._summary_path = None
+        self._file_report_path = None
+        self._pair_report_path = None
+        self._file_rows = []
+        self._pair_rows = []
+
+        self._clear_summary_display()
+        self._populate_file_table()
+        self._populate_pair_table()
+        self._populate_match_rate_chart()
+
+        self.file_report_status_label.setText(
+            "File report is not available."
+        )
+        self.pair_report_status_label.setText(
+            "Pair report is not available."
+        )
+
+        self.file_status_chart.setTitle(
+            "File status counts are not available"
+        )
+        self.pair_status_chart.setTitle(
+            "Pair status counts are not available"
+        )
+        self.match_rate_chart.setTitle(
+            "Persisted match rates are not available"
+        )
+
+        self._show_unavailable(
+            "Synchronization summary is not available."
+        )
 
     def set_summary(self, summary: dict[str, Any] | None) -> bool:
         """Display a persisted synchronization summary."""

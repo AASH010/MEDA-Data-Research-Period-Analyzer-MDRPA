@@ -217,18 +217,10 @@ class DashboardView(QWidget):
 
     def _clear_analysis_dashboards(self) -> None:
         """Reset all visualization widgets to their unavailable states."""
-        self._coverage_dashboard.load_summary_file(
-            Path("__dashboard_no_run__") / "coverage_summary.json"
-        )
-        self._quality_dashboard.load_artifacts(
-            Path("__dashboard_no_run__") / "quality_summary.json"
-        )
-        self._synchronization_dashboard.load_artifacts(
-            Path("__dashboard_no_run__") / "synchronization_summary.json"
-        )
-        self._ranking_dashboard.load_artifacts(
-            Path("__dashboard_no_run__") / "period_ranking_summary.json"
-        )
+        self._coverage_dashboard.reset()
+        self._quality_dashboard.reset()
+        self._synchronization_dashboard.reset()
+        self._ranking_dashboard.reset()
 
     @staticmethod
     def _format_sol_range(record: RunRecord) -> str:

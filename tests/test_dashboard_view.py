@@ -183,7 +183,7 @@ def test_dashboard_refresh_preserves_selected_run(
         run_manager,
         "dashboard-run-first",
     )
-    second = create_completed_run(
+    create_completed_run(
         run_manager,
         "dashboard-run-second",
     )
@@ -269,3 +269,48 @@ def test_dashboard_displays_execution_summary_from_metadata(
     assert "Execution Summary (metadata.json)" in displayed
     assert "quality_analyzer" in displayed
     assert "test failure" in dashboard.run_details_label.text()
+
+
+def test_clear_analysis_dashboards_calls_explicit_resets(
+    dashboard,
+    monkeypatch,
+):
+    reset_calls = []
+
+    widgets = (
+        dashboard.coverage_dashboard,
+        dashboard.quality_dashboard,
+        dashboard.synchronization_dashboard,
+        dashboard.ranking_dashboard,
+    )
+
+    for widget in widgets:
+        original_reset = widget.reset
+
+        def tracked_reset(
+            original=original_reset,
+            name=type(widget).__name__,
+        ):
+            reset_calls.append(name)
+            original()
+
+        monkeypatch.setattr(widget, "reset", tracked_reset)
+
+    dashboard._clear_analysis_dashboards()
+
+    assert reset_calls == [
+        "CoverageDashboard",
+        "QualityDashboard",
+        "SynchronizationDashboard",
+        "RankingDashboard",
+    ]
+
+    assert dashboard.coverage_dashboard.summary_path is None
+    assert dashboard.quality_dashboard.summary_path is None
+    assert dashboard.synchronization_dashboard.summary_path is None
+    assert dashboard.ranking_dashboard.summary_path is None
+
+    assert dashboard.coverage_dashboard.summary is None
+    assert dashboard.quality_dashboard.summary is None
+    assert dashboard.synchronization_dashboard.summary is None
+    assert dashboard.ranking_dashboard.summary is None

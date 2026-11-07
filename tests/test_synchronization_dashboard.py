@@ -1,4 +1,3 @@
-
 """Tests for the read-only Synchronization Dashboard."""
 
 from __future__ import annotations
@@ -592,3 +591,115 @@ def test_loaded_reports_are_not_modified(
 
     assert file_path.read_bytes() == original_file
     assert pair_path.read_bytes() == original_pair
+
+
+def test_reset_clears_all_run_specific_state(
+    dashboard,
+    synchronization_summary,
+    file_rows,
+    pair_rows,
+    tmp_path,
+):
+    summary_path = tmp_path / "synchronization_summary.json"
+    summary_path.write_text(
+        json.dumps(synchronization_summary),
+        encoding="utf-8",
+    )
+
+    file_path = tmp_path / "synchronization_file_report.csv"
+    write_csv(file_path, dashboard.FILE_SOURCE_COLUMNS, file_rows)
+
+    pair_path = tmp_path / "synchronization_pair_report.csv"
+    write_csv(pair_path, dashboard.PAIR_SOURCE_COLUMNS, pair_rows)
+
+    assert dashboard.load_artifacts(
+        summary_path,
+        file_path,
+        pair_path,
+    ) is True
+
+    assert dashboard.summary is not None
+    assert dashboard.summary_path == summary_path
+    assert dashboard.file_report_path == file_path
+    assert dashboard.pair_report_path == pair_path
+    assert len(dashboard.file_rows) == 2
+    assert len(dashboard.pair_rows) == 2
+    assert dashboard.file_table.rowCount() == 2
+    assert dashboard.pair_table.rowCount() == 2
+
+    for chart in (
+        dashboard.file_status_chart,
+        dashboard.pair_status_chart,
+        dashboard.match_rate_chart,
+    ):
+        assert any(
+            isinstance(item, pg.BarGraphItem)
+            for item in chart.getPlotItem().items
+        )
+
+    dashboard.reset()
+
+    assert dashboard.summary is None
+    assert dashboard.summary_path is None
+    assert dashboard.file_report_path is None
+    assert dashboard.pair_report_path is None
+    assert dashboard.file_rows == []
+    assert dashboard.pair_rows == []
+
+    assert dashboard.file_table.rowCount() == 0
+    assert dashboard.pair_table.rowCount() == 0
+
+    assert dashboard.total_files_label.text() == (
+        "Total Files: Not available"
+    )
+    assert dashboard.analysed_files_label.text() == (
+        "Analysed Files: Not available"
+    )
+    assert dashboard.unanalysed_files_label.text() == (
+        "Unanalysed Files: Not available"
+    )
+    assert dashboard.total_pairs_label.text() == (
+        "Product Pairs: Not available"
+    )
+    assert dashboard.analysed_pairs_label.text() == (
+        "Analysed Pairs: Not available"
+    )
+    assert dashboard.pairs_with_matches_label.text() == (
+        "Pairs With Matches: Not available"
+    )
+    assert dashboard.tolerance_label.text() == (
+        "Tolerance: Not available"
+    )
+
+    assert dashboard.file_report_status_label.text() == (
+        "File report is not available."
+    )
+    assert dashboard.pair_report_status_label.text() == (
+        "Pair report is not available."
+    )
+    assert dashboard.status_label.text() == (
+        "Synchronization summary is not available."
+    )
+
+    for chart in (
+        dashboard.file_status_chart,
+        dashboard.pair_status_chart,
+        dashboard.match_rate_chart,
+    ):
+        assert not any(
+            isinstance(item, pg.BarGraphItem)
+            for item in chart.getPlotItem().items
+        )
+
+    assert "not available" in (
+        dashboard.file_status_chart.getPlotItem()
+        .titleLabel.text.lower()
+    )
+    assert "not available" in (
+        dashboard.pair_status_chart.getPlotItem()
+        .titleLabel.text.lower()
+    )
+    assert "not available" in (
+        dashboard.match_rate_chart.getPlotItem()
+        .titleLabel.text.lower()
+    )

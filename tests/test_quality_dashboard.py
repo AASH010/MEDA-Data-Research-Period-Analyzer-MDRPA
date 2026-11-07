@@ -413,3 +413,76 @@ def test_loaded_report_is_not_modified(
 
     assert dashboard.load_report_file(path) is True
     assert path.read_bytes() == original
+
+def test_reset_clears_all_run_specific_state(
+    dashboard,
+    quality_summary,
+    report_rows,
+    tmp_path,
+):
+    summary_path = tmp_path / "quality_summary.json"
+    summary_path.write_text(
+        json.dumps(quality_summary),
+        encoding="utf-8",
+    )
+
+    report_path = tmp_path / "quality_field_report.csv"
+    write_report(report_path, report_rows)
+
+    assert dashboard.load_artifacts(summary_path, report_path) is True
+
+    assert dashboard.summary is not None
+    assert dashboard.summary_path == summary_path
+    assert dashboard.report_path == report_path
+    assert len(dashboard.report_rows) == 2
+    assert dashboard.report_table.rowCount() == 2
+
+    assert any(
+        isinstance(item, pg.BarGraphItem)
+        for item in dashboard.category_chart.getPlotItem().items
+    )
+    assert any(
+        isinstance(item, pg.BarGraphItem)
+        for item in dashboard.status_chart.getPlotItem().items
+    )
+
+    dashboard.reset()
+
+    assert dashboard.summary is None
+    assert dashboard.summary_path is None
+    assert dashboard.report_path is None
+    assert dashboard.report_rows == []
+    assert dashboard.report_table.rowCount() == 0
+
+    assert dashboard.report_rows_label.text() == (
+        "Report Rows: Not available"
+    )
+    assert dashboard.analysed_fields_label.text() == (
+        "Analysed Field Reports: Not available"
+    )
+    assert dashboard.quality_candidates_label.text() == (
+        "Quality Candidates: Not available"
+    )
+    assert dashboard.range_checks_label.text() == (
+        "Range Checks: Not available"
+    )
+    assert dashboard.below_minimum_label.text() == (
+        "Below Minimum: Not available"
+    )
+    assert dashboard.above_maximum_label.text() == (
+        "Above Maximum: Not available"
+    )
+
+    assert dashboard.report_status_label.text() == (
+        "Field report is not available."
+    )
+    assert "not available" in dashboard.status_label.text().lower()
+
+    assert not any(
+        isinstance(item, pg.BarGraphItem)
+        for item in dashboard.category_chart.getPlotItem().items
+    )
+    assert not any(
+        isinstance(item, pg.BarGraphItem)
+        for item in dashboard.status_chart.getPlotItem().items
+    )

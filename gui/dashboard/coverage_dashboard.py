@@ -204,6 +204,13 @@ class CoverageDashboard(QWidget):
         self._display_summary(summary)
         return True
 
+    def reset(self) -> None:
+        """Clear all Run-specific data and restore the unavailable state."""
+        self._summary_path = None
+        self._summary = None
+        self._clear_display()
+        self._show_unavailable("Coverage summary is not available.")
+
     def load_summary_file(self, path: str | Path) -> bool:
         """Load a persisted coverage summary JSON file."""
         summary_path = Path(path)

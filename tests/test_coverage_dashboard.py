@@ -294,3 +294,38 @@ def test_invalid_summary_clears_previous_data(
     assert dashboard.sol_range_label.text() == (
         "SOL Range: Not available"
     )
+
+def test_reset_clears_all_run_specific_state(
+    dashboard,
+    coverage_summary,
+    tmp_path,
+):
+    summary_path = tmp_path / "coverage_summary.json"
+    summary_path.write_text(
+        json.dumps(coverage_summary),
+        encoding="utf-8",
+    )
+
+    assert dashboard.load_summary_file(summary_path) is True
+    assert dashboard.summary is not None
+    assert dashboard.product_table.rowCount() == 2
+
+    dashboard.reset()
+
+    assert dashboard.summary is None
+    assert dashboard.summary_path is None
+    assert dashboard.product_table.rowCount() == 0
+    assert dashboard.sol_range_label.text() == (
+        "SOL Range: Not available"
+    )
+    assert dashboard.report_count_label.text() == (
+        "Coverage Reports: Not available"
+    )
+    assert dashboard.product_count_label.text() == "Products: 0"
+    assert "not available" in dashboard.status_label.text().lower()
+
+    plot_item = dashboard.chart.getPlotItem()
+    assert not any(
+        isinstance(item, pg.BarGraphItem)
+        for item in plot_item.items
+    )
