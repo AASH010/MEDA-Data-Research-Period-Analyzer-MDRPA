@@ -1,4 +1,3 @@
-
 from threading import Event
 
 import pytest
@@ -94,10 +93,13 @@ def _patch_successful_analyzers(monkeypatch):
         lambda path, rows: _write_artifact(path),
     )
 
+    # The executor passes start_sol/end_sol, so the double must accept them.
     monkeypatch.setattr(
         pipeline_executor.quality_analyzer,
         "build_summary",
-        lambda rows: {"report_row_count": len(rows)},
+        lambda rows, **kwargs: {
+            "report_row_count": len(rows),
+        },
     )
 
     monkeypatch.setattr(
@@ -121,10 +123,11 @@ def _patch_successful_analyzers(monkeypatch):
         lambda path, rows, columns: _write_artifact(path),
     )
 
+    # The executor passes start_sol/end_sol, so the double must accept them.
     monkeypatch.setattr(
         pipeline_executor.synchronization_analyzer,
         "build_summary",
-        lambda files, pairs, tolerance: {
+        lambda files, pairs, tolerance, **kwargs: {
             "file_count": len(files),
             "pair_count": len(pairs),
         },

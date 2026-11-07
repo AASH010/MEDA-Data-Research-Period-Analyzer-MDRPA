@@ -790,3 +790,26 @@ def test_run_reads_analyzer_reports_and_writes_ranking(
     assert len(ranking_rows) == 1
     assert ranking_rows[0]["ranking_status"] == "rankable"
     assert ranking_rows[0]["rank"] == "1"
+
+
+def test_read_csv_normalizes_header_names(tmp_path):
+    path = tmp_path / "report.csv"
+
+    path.write_text(
+        " sol_number , extension , product_code \n"
+        "100,csv,ATS\n",
+        encoding="utf-8",
+    )
+
+    rows = ranker.read_csv(
+        path,
+        {"sol_number", "extension", "product_code"},
+    )
+
+    assert rows == [
+        {
+            "sol_number": "100",
+            "extension": "csv",
+            "product_code": "ATS",
+        }
+    ]

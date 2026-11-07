@@ -479,6 +479,59 @@ def test_find_metadata_record_handles_missing_filename():
 # CSV path resolution
 # --------------------------------------------------
 
+def test_find_csv_path_rejects_relative_path_outside_input_root(
+    tmp_path,
+):
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+
+    outside_file = tmp_path / "outside.csv"
+    outside_file.write_text(
+        "QualityFlag\n1\n",
+        encoding="utf-8",
+    )
+
+    inventory_row = make_inventory_row(
+        filename="outside.csv",
+        relative_path="../outside.csv",
+    )
+
+    result = qa.find_csv_path(
+        input_root,
+        inventory_row,
+    )
+
+    assert result is None
+
+
+def test_find_csv_path_rejects_sol_folder_outside_input_root(
+    tmp_path,
+):
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+
+    outside_directory = tmp_path / "outside"
+    outside_directory.mkdir()
+
+    outside_file = outside_directory / "sample.csv"
+    outside_file.write_text(
+        "QualityFlag\n1\n",
+        encoding="utf-8",
+    )
+
+    inventory_row = make_inventory_row(
+        filename="sample.csv",
+        sol_folder="../outside",
+        relative_path="",
+    )
+
+    result = qa.find_csv_path(
+        input_root,
+        inventory_row,
+    )
+
+    assert result is None
+
 def test_find_csv_path_uses_relative_path(tmp_path):
     csv_path = tmp_path / "SOL100" / "sub" / "sample.csv"
     csv_path.parent.mkdir(parents=True)

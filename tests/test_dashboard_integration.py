@@ -1,3 +1,4 @@
+
 """Integration tests for Dashboard and application composition."""
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QTabWidget
 
 from application.analysis_controller import AnalysisController
 from application.app_config import AppConfig
@@ -219,54 +220,68 @@ def write_dashboard_artifacts(record, marker: int) -> None:
         ),
     )
 
+    ranking_summary = {
+        "analyzer": "MEDA Period Ranker",
+        "ranking_type": "exploratory_comparative",
+        "sol_range": {
+            "start": 100,
+            "end": 110,
+        },
+        "window_size": 10,
+        "total_candidate_windows": 1,
+        "rankable_windows": 1,
+        "unrankable_windows": 0,
+        "comparison_group_count": 1,
+        "ranking_weights": {
+            "data_integrity": 1.0,
+        },
+        "min_metrics": 1,
+        "important_limitations": [
+            "Scores are exploratory indicators.",
+        ],
+    }
+
     write_json(
         output / "period_ranking_summary.json",
-        {
-            "analyzer": "MEDA Period Ranker",
-            "ranking_type": "exploratory_comparative",
-            "sol_range": {
-                "start": 100,
-                "end": 110,
-            },
-            "window_size": 10,
-            "total_candidate_windows": 1,
-            "rankable_windows": 1,
-            "unrankable_windows": 0,
-            "comparison_group_count": 1,
-            "ranking_weights": {
-                "data_integrity": 1.0,
-            },
-            "min_metrics": 1,
-            "important_limitations": [
-                "Scores are exploratory indicators.",
-            ],
-        },
+        ranking_summary,
+    )
+
+    write_json(
+        output / "period_ranking_full_summary.json",
+        ranking_summary,
+    )
+
+    ranking_columns = (
+        "rank",
+        "comparison_group",
+        "window_start_sol",
+        "window_end_sol",
+        "window_label",
+        "ranking_status",
+        "is_partial_window",
+        "exploratory_score",
+        "available_metrics",
+        "metrics_used",
+        "total_sols",
+        "file_availability_score",
+        "data_integrity_score",
+        "quality_indicators_score",
+        "synchronization_score",
+        "file_availability_sols",
+        "data_integrity_sols",
+        "quality_indicators_sols",
+        "synchronization_sols",
+        "reasons",
     )
 
     write_empty_csv(
         output / "period_ranking.csv",
-        (
-            "rank",
-            "comparison_group",
-            "window_start_sol",
-            "window_end_sol",
-            "window_label",
-            "ranking_status",
-            "is_partial_window",
-            "exploratory_score",
-            "available_metrics",
-            "metrics_used",
-            "total_sols",
-            "file_availability_score",
-            "data_integrity_score",
-            "quality_indicators_score",
-            "synchronization_score",
-            "file_availability_sols",
-            "data_integrity_sols",
-            "quality_indicators_sols",
-            "synchronization_sols",
-            "reasons",
-        ),
+        ranking_columns,
+    )
+
+    write_empty_csv(
+        output / "period_ranking_full.csv",
+        ranking_columns,
     )
 
 
@@ -399,25 +414,27 @@ def test_dashboard_exposes_all_analysis_visualization_tabs(
 ):
     dashboard = main_window.dashboard_view
 
-    assert dashboard.analysis_tabs.count() == 5
+    assert dashboard.analysis_tabs.count() == 2
     assert dashboard.analysis_tabs.tabText(0) == "Run Summary"
-    assert dashboard.analysis_tabs.tabText(1) == "Coverage"
-    assert dashboard.analysis_tabs.tabText(2) == "Quality"
-    assert dashboard.analysis_tabs.tabText(3) == "Synchronization"
-    assert dashboard.analysis_tabs.tabText(4) == "Ranking"
+    assert dashboard.analysis_tabs.tabText(1) == "Full Dataset"
 
-    assert dashboard.analysis_tabs.widget(1) is (
-        dashboard.coverage_dashboard
+    full_dataset_page = dashboard.analysis_tabs.widget(1)
+    analyzer_tabs = full_dataset_page.findChild(
+        QTabWidget,
+        "dashboard_analyzer_tabs",
     )
-    assert dashboard.analysis_tabs.widget(2) is (
-        dashboard.quality_dashboard
-    )
-    assert dashboard.analysis_tabs.widget(3) is (
-        dashboard.synchronization_dashboard
-    )
-    assert dashboard.analysis_tabs.widget(4) is (
-        dashboard.ranking_dashboard
-    )
+
+    assert analyzer_tabs is not None
+    assert analyzer_tabs.count() == 4
+    assert analyzer_tabs.tabText(0) == "Coverage"
+    assert analyzer_tabs.tabText(1) == "Quality"
+    assert analyzer_tabs.tabText(2) == "Synchronization"
+    assert analyzer_tabs.tabText(3) == "Ranking"
+
+    assert analyzer_tabs.widget(0) is dashboard.coverage_dashboard
+    assert analyzer_tabs.widget(1) is dashboard.quality_dashboard
+    assert analyzer_tabs.widget(2) is dashboard.synchronization_dashboard
+    assert analyzer_tabs.widget(3) is dashboard.ranking_dashboard
 
 
 def test_dashboard_loads_selected_run_artifacts_into_all_visualizations(

@@ -527,21 +527,31 @@ def find_csv_path(
     inventory_row: dict,
 ) -> Path | None:
     """
-    Resolve an inventory CSV path.
+    Resolve an inventory CSV path without allowing access outside
+    the input root, including through symbolic links.
 
     Relative path has priority. Filename fallback is accepted only
-    when it resolves uniquely.
+    when it resolves uniquely inside the input root.
     """
-    input_root = Path(input_root).expanduser()
+    input_root = Path(input_root).expanduser().resolve()
+
+    def safe_file(candidate: Path) -> Path | None:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(input_root)
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+        return resolved if resolved.is_file() else None
 
     relative_path = relative_csv_path(
         inventory_row.get("relative_path")
     )
 
     if relative_path is not None:
-        candidate = input_root / relative_path
+        candidate = safe_file(input_root / relative_path)
 
-        if candidate.is_file():
+        if candidate is not None:
             return candidate
 
     filename = str(
@@ -560,18 +570,35 @@ def find_csv_path(
 
     if sol_folder:
         sol_directory = input_root / sol_folder
-        direct = sol_directory / filename
 
-        if direct.is_file():
-            return direct
+        try:
+            resolved_sol_directory = sol_directory.resolve()
+            resolved_sol_directory.relative_to(input_root)
+        except (OSError, RuntimeError, ValueError):
+            resolved_sol_directory = None
 
-        if sol_directory.is_dir():
-            matches = [
-                path
-                for path in sol_directory.rglob("*")
-                if path.is_file()
-                and path.name.casefold() == filename.casefold()
-            ]
+        if (
+            resolved_sol_directory is not None
+            and resolved_sol_directory.is_dir()
+        ):
+            direct = safe_file(
+                resolved_sol_directory / filename
+            )
+
+            if direct is not None:
+                return direct
+
+            matches = []
+
+            for path in resolved_sol_directory.rglob("*"):
+                if (
+                    path.is_file()
+                    and path.name.casefold() == filename.casefold()
+                ):
+                    safe_path = safe_file(path)
+
+                    if safe_path is not None:
+                        matches.append(safe_path)
 
             if len(matches) == 1:
                 return matches[0]
@@ -582,12 +609,17 @@ def find_csv_path(
     if not input_root.is_dir():
         return None
 
-    matches = [
-        path
-        for path in input_root.rglob("*")
-        if path.is_file()
-        and path.name.casefold() == filename.casefold()
-    ]
+    matches = []
+
+    for path in input_root.rglob("*"):
+        if (
+            path.is_file()
+            and path.name.casefold() == filename.casefold()
+        ):
+            safe_path = safe_file(path)
+
+            if safe_path is not None:
+                matches.append(safe_path)
 
     return matches[0] if len(matches) == 1 else None
 

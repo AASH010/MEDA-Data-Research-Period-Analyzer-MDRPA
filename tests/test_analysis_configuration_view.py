@@ -180,8 +180,6 @@ def test_build_config_accepts_custom_values(config_view, tmp_path):
 @pytest.mark.parametrize(
     "start,end",
     [
-        ("100", ""),
-        ("", "150"),
         ("200", "100"),
         ("-1", "100"),
         ("abc", "100"),
@@ -197,6 +195,29 @@ def test_invalid_sol_ranges_are_rejected(
 
     with pytest.raises((TypeError, ValueError)):
         config_view.build_config()
+
+
+@pytest.mark.parametrize(
+    "start,end,expected_start,expected_end",
+    [
+        ("100", "", 100, None),
+        ("", "150", None, 150),
+    ],
+)
+def test_partial_sol_ranges_are_accepted(
+    config_view,
+    start,
+    end,
+    expected_start,
+    expected_end,
+):
+    config_view.start_sol_edit.setText(start)
+    config_view.end_sol_edit.setText(end)
+
+    config = config_view.build_config()
+
+    assert config.start_sol == expected_start
+    assert config.end_sol == expected_end
 
 
 def test_empty_required_products_are_rejected(config_view):
@@ -221,7 +242,8 @@ def test_invalid_configuration_does_not_emit(config_view):
     emitted = []
     config_view.config_ready.connect(emitted.append)
 
-    config_view.start_sol_edit.setText("100")
+    config_view.start_sol_edit.setText("200")
+    config_view.end_sol_edit.setText("100")
 
     assert config_view.validate_configuration() is False
     assert emitted == []
@@ -352,6 +374,7 @@ def test_clearing_input_invalidates_analysis_configuration(
     assert main_window.selected_input_dir is None
     assert config_view.input_directory is None
     assert config_view.validated_config is None
+
 
 def test_unvalidated_input_never_reaches_configuration(
     main_window,

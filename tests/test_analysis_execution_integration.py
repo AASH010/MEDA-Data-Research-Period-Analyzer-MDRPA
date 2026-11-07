@@ -1,4 +1,3 @@
-
 """Integration tests for MainWindow analysis execution."""
 
 from __future__ import annotations
@@ -361,9 +360,11 @@ def test_invalid_configuration_does_not_start_pipeline(
         main_window.analysis_configuration_view
     )
 
-    configuration_view.start_sol_edit.setText("100")
+    # A reversed SOL range is genuinely invalid.
+    configuration_view.start_sol_edit.setText("200")
+    configuration_view.end_sol_edit.setText("100")
 
-    # Start performs fresh validation and must reject the partial SOL range.
+    # Start performs fresh validation and must reject the invalid range.
     main_window.analysis_center_view.start_button.click()
 
     QApplication.instance().processEvents()

@@ -259,6 +259,49 @@ def test_resolve_csv_path_returns_none_for_ambiguous_filename(tmp_path):
     assert analyzer.resolve_csv_path(tmp_path, row) is None
 
 
+def test_resolve_csv_path_rejects_parent_directory_traversal(
+    tmp_path,
+):
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+
+    outside_file = tmp_path / "outside.csv"
+    outside_file.write_text("time,value\n1,2\n", encoding="utf-8")
+
+    row = make_inventory_row(
+        filename="outside.csv",
+        sol_folder="SOL100",
+        relative_path="../outside.csv",
+    )
+
+    assert analyzer.resolve_csv_path(input_root, row) is None
+
+
+def test_resolve_csv_path_rejects_symlink_outside_input_root(
+    tmp_path,
+):
+    input_root = tmp_path / "input"
+    sol_directory = input_root / "SOL100"
+    sol_directory.mkdir(parents=True)
+
+    outside_file = tmp_path / "outside.csv"
+    outside_file.write_text("time,value\n1,2\n", encoding="utf-8")
+
+    link = sol_directory / "sample.csv"
+
+    try:
+        link.symlink_to(outside_file)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symbolic links are not available on this system.")
+
+    row = make_inventory_row(
+        filename="sample.csv",
+        relative_path="",
+    )
+
+    assert analyzer.resolve_csv_path(input_root, row) is None
+
+
 # --------------------------------------------------
 # One-to-one matching
 # --------------------------------------------------

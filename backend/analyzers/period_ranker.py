@@ -184,6 +184,7 @@ def normalized_weights(
     }
 
 
+
 def read_csv(
     path: Path,
     required_columns: set[str] | None = None,
@@ -191,6 +192,7 @@ def read_csv(
     """
     Read a CSV report and validate its header when requested.
 
+    Header names are normalized before rows are returned.
     Missing reports are treated as unavailable reports.
     Existing reports with invalid headers raise ValueError.
     """
@@ -216,20 +218,37 @@ def read_csv(
                     f"Report has no header: {path}"
                 )
 
-            headers = {
+            normalized_headers = [
                 str(name).strip()
                 for name in reader.fieldnames
                 if name is not None
-            }
+            ]
+
+            if len(normalized_headers) != len(reader.fieldnames):
+                raise ValueError(
+                    f"Invalid empty header in report: {path}"
+                )
+
+            if (
+                any(not name for name in normalized_headers)
+                or len(set(normalized_headers)) != len(normalized_headers)
+            ):
+                raise ValueError(
+                    f"Report contains empty or duplicate headers: {path}"
+                )
 
             if required_columns:
-                missing = sorted(required_columns - headers)
+                missing = sorted(
+                    required_columns - set(normalized_headers)
+                )
 
                 if missing:
                     raise ValueError(
                         f"Invalid report schema in {path}. "
                         f"Missing required columns: {', '.join(missing)}"
                     )
+
+            reader.fieldnames = normalized_headers
 
             return list(reader)
 
