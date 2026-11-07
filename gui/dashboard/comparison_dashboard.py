@@ -1,4 +1,3 @@
-
 """Read-only comparison of persisted metrics across MEDA analysis Runs."""
 
 from __future__ import annotations
@@ -38,6 +37,8 @@ class ComparisonDashboard(QWidget):
         ("Synchronization", "synchronization_summary.json"),
         ("Ranking", "period_ranking_summary.json"),
     )
+
+    STRUCTURAL_MATCH_STATUS = "Structural match only"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -183,8 +184,10 @@ class ComparisonDashboard(QWidget):
             self._clear_results(
                 "No Runs are available for comparison."
             )
-        elif len(self.selected_run_ids) < 2:
-            self.status_label.setText(
+            return
+
+        if len(self.selected_run_ids) < 2:
+            self._clear_results(
                 "Select at least two Runs to compare persisted results."
             )
 
@@ -317,6 +320,7 @@ class ComparisonDashboard(QWidget):
             self._clear_results(
                 "The selected Runs are no longer available."
             )
+            self._update_compare_button()
             return False
 
         self._comparison_rows = []
@@ -375,9 +379,7 @@ class ComparisonDashboard(QWidget):
                 if identity is not None
             }
 
-            identity_mismatch = (
-                len(known_identities) > 1
-            )
+            identity_mismatch = len(known_identities) > 1
 
             for metric_path in metric_paths:
                 values: dict[str, Any] = {}
@@ -393,13 +395,9 @@ class ComparisonDashboard(QWidget):
                         error = artifact_errors[record.run_id]
 
                         if error == "missing":
-                            values[record.run_id] = (
-                                "Artifact missing"
-                            )
+                            values[record.run_id] = "Artifact missing"
                         elif error == "invalid":
-                            values[record.run_id] = (
-                                "Artifact invalid"
-                            )
+                            values[record.run_id] = "Artifact invalid"
                         elif error == "incompatible":
                             values[record.run_id] = (
                                 "Artifact incompatible"
@@ -418,7 +416,7 @@ class ComparisonDashboard(QWidget):
                 elif None in identities:
                     status = "Analyzer identity unavailable"
                 else:
-                    status = "Comparable"
+                    status = self.STRUCTURAL_MATCH_STATUS
 
                 self._comparison_rows.append({
                     "artifact": artifact_label,
@@ -429,8 +427,8 @@ class ComparisonDashboard(QWidget):
 
         self._populate_table(records)
 
-        comparable_count = sum(
-            row["status"] == "Comparable"
+        structural_match_count = sum(
+            row["status"] == self.STRUCTURAL_MATCH_STATUS
             for row in self._comparison_rows
         )
         incomplete_count = sum(
@@ -444,9 +442,10 @@ class ComparisonDashboard(QWidget):
 
         self.status_label.setText(
             f"Compared {len(records)} Runs. "
-            f"Comparable metrics: {comparable_count}; "
+            f"Structural matches: {structural_match_count}; "
             f"incomplete: {incomplete_count}; "
             f"incompatible: {incompatible_count}. "
+            "Structural matches do not establish scientific equivalence. "
             "Only persisted numeric values were read; no analysis was rerun."
         )
 

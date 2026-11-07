@@ -199,10 +199,10 @@ def test_compare_reads_shared_persisted_numeric_metrics(
 
     assert row["values"][first.run_id] == 2
     assert row["values"][second.run_id] == 3
-    assert row["status"] == "Comparable"
+    assert row["status"] == "Structural match only"
 
     assert comparison_dashboard.comparison_table.rowCount() > 0
-    assert "Comparable metrics:" in (
+    assert "Structural matches do not establish scientific equivalence." in (
         comparison_dashboard.status_label.text()
     )
 
@@ -527,6 +527,59 @@ def test_clear_selection_clears_previous_comparison(
     assert comparison_dashboard.selected_run_ids == ()
     assert comparison_dashboard.comparison_rows == []
     assert comparison_dashboard.comparison_table.rowCount() == 0
+    assert comparison_dashboard.compare_button.isEnabled() is False
+
+
+def test_set_runs_clears_stale_comparison_when_selection_drops_below_two(
+    comparison_dashboard,
+    run_manager,
+):
+    first = create_completed_run(
+        run_manager,
+        "comparison-stale-first",
+    )
+    second = create_completed_run(
+        run_manager,
+        "comparison-stale-second",
+    )
+
+    write_summary(
+        first,
+        "quality_summary.json",
+        {
+            "analyzer": "MEDA Quality Analyzer",
+            "report_row_count": 10,
+        },
+    )
+    write_summary(
+        second,
+        "quality_summary.json",
+        {
+            "analyzer": "MEDA Quality Analyzer",
+            "report_row_count": 20,
+        },
+    )
+
+    comparison_dashboard.set_runs((first, second))
+    select_runs(
+        comparison_dashboard,
+        [first.run_id, second.run_id],
+    )
+
+    assert comparison_dashboard.compare_selected_runs() is True
+    assert comparison_dashboard.comparison_rows
+    assert comparison_dashboard.comparison_table.rowCount() > 0
+
+    # Refreshing with only one of the selected Runs invalidates the
+    # previous comparison. Stale results must not remain visible.
+    comparison_dashboard.set_runs((first,))
+
+    assert comparison_dashboard.selected_run_ids == (first.run_id,)
+    assert comparison_dashboard.comparison_rows == []
+    assert comparison_dashboard.comparison_table.rowCount() == 0
+    assert "at least two" in (
+        comparison_dashboard.status_label.text().lower()
+    )
     assert comparison_dashboard.compare_button.isEnabled() is False
 
 
