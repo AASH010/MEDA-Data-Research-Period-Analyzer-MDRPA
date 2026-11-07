@@ -19,10 +19,12 @@ from PySide6.QtWidgets import (
 from application.analysis_controller import AnalysisController
 from application.app_config import AppConfig
 from application.version import APP_NAME
+from backend.run_manager.run_manager import RunManager
 from gui.analysis.analysis_center_view import AnalysisCenterView
 from gui.analysis.analysis_configuration_view import (
     AnalysisConfigurationView,
 )
+from gui.dashboard.dashboard_view import DashboardView
 from gui.input_manager.input_manager_view import InputManagerView
 from gui.main_window.menu_bar import MainMenuBar
 from gui.main_window.navigation_sidebar import NavigationSidebar
@@ -68,6 +70,7 @@ class MainWindow(QMainWindow):
             AnalysisConfigurationView | None
         ) = None
         self._analysis_center_view: AnalysisCenterView | None = None
+        self._dashboard_view: DashboardView | None = None
 
         self._shutdown_pending = False
         self._allow_close = False
@@ -112,6 +115,11 @@ class MainWindow(QMainWindow):
     def analysis_center_view(self) -> AnalysisCenterView | None:
         """Return the Analysis Execution controls."""
         return self._analysis_center_view
+
+    @property
+    def dashboard_view(self) -> DashboardView | None:
+        """Return the Dashboard page."""
+        return self._dashboard_view
 
     @property
     def selected_input_dir(self) -> Path | None:
@@ -160,6 +168,16 @@ class MainWindow(QMainWindow):
             )
 
         self._analysis_controller = controller
+
+        pipeline = controller.pipeline
+        run_manager = getattr(pipeline, "run_manager", None)
+
+        if (
+            self._dashboard_view is not None
+            and isinstance(run_manager, RunManager)
+        ):
+            self._dashboard_view.set_run_manager(run_manager)
+
         self._connect_analysis_controller(controller)
 
     def _connect_analysis_controller(
@@ -194,6 +212,9 @@ class MainWindow(QMainWindow):
         controller.thread_finished.connect(
             self._handle_analysis_thread_finished
         )
+        controller.thread_finished.connect(
+            self._refresh_dashboard
+        )
 
         if self._analysis_center_view is not None:
             controller.started.connect(
@@ -223,6 +244,11 @@ class MainWindow(QMainWindow):
             controller.thread_finished.connect(
                 self._analysis_center_view.set_execution_ended
             )
+
+    def _refresh_dashboard(self) -> None:
+        """Refresh persisted Run information after execution ends."""
+        if self._dashboard_view is not None:
+            self._dashboard_view.refresh_runs()
 
     # ------------------------------------------------------------------
     # Input Manager / Analysis Configuration integration
@@ -483,6 +509,10 @@ class MainWindow(QMainWindow):
                 insert_index = max(0, page_layout.count() - 1)
                 page_layout.insertWidget(insert_index, center_view)
 
+            elif page_key == "dashboard":
+                page = DashboardView(self.page_stack)
+                self._dashboard_view = page
+
             else:
                 page = self._create_placeholder_page(
                     page_key,
@@ -544,6 +574,9 @@ class MainWindow(QMainWindow):
 
         self.page_stack.setCurrentWidget(self._pages[page_key])
         self.navigation_sidebar.set_current_page(page_key)
+
+        if page_key == "dashboard":
+            self._refresh_dashboard()
 
         page_titles = dict(self.PAGE_DEFINITIONS)
         self.application_status_bar.showMessage(

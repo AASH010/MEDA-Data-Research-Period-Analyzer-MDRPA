@@ -1,0 +1,376 @@
+
+"""Read-only dashboard for browsing completed and previous analysis runs."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from backend.run_manager.run_manager import RunManager
+from backend.run_manager.run_registry import RunRecord
+
+
+__all__ = ["DashboardView"]
+
+
+class DashboardView(QWidget):
+    """Browse persisted Runs and display their existing JSON summaries."""
+
+    SUMMARY_FILES = (
+        ("Coverage Summary", "coverage_summary.json"),
+        ("Quality Summary", "quality_summary.json"),
+        ("Synchronization Summary", "synchronization_summary.json"),
+        ("Period Ranking Summary", "period_ranking_summary.json"),
+    )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+        self.setObjectName("dashboard_view")
+
+        self._run_manager: RunManager | None = None
+        self._records_by_id: dict[str, RunRecord] = {}
+        self._selected_run_id: str | None = None
+
+        self._build_ui()
+        self._connect_signals()
+        self._show_unavailable_state()
+
+    @property
+    def run_manager(self) -> RunManager | None:
+        """Return the RunManager used as the dashboard data source."""
+        return self._run_manager
+
+    @property
+    def selected_run_id(self) -> str | None:
+        """Return the currently selected Run identifier."""
+        return self._selected_run_id
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+
+        title = QLabel("Analysis Dashboard")
+        title.setObjectName("dashboard_title")
+
+        self.status_label = QLabel("Dashboard is not connected.")
+        self.status_label.setObjectName("dashboard_status")
+        self.status_label.setWordWrap(True)
+
+        runs_group = QGroupBox("Analysis Runs", self)
+        runs_group.setObjectName("dashboard_runs_group")
+        runs_layout = QVBoxLayout(runs_group)
+
+        self.run_table = QTableWidget(0, 4, runs_group)
+        self.run_table.setObjectName("dashboard_runs_table")
+        self.run_table.setHorizontalHeaderLabels(
+            ("Run ID", "Status", "SOL Range", "Created")
+        )
+        self.run_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.run_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.run_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.run_table.setAlternatingRowColors(True)
+        self.run_table.setWordWrap(False)
+        self.run_table.horizontalHeader().setStretchLastSection(True)
+
+        runs_layout.addWidget(self.run_table)
+
+        details_group = QGroupBox("Selected Run Details", self)
+        details_group.setObjectName("dashboard_details_group")
+        details_layout = QVBoxLayout(details_group)
+
+        self.run_details_label = QLabel("No Run selected.")
+        self.run_details_label.setObjectName("dashboard_run_details")
+        self.run_details_label.setWordWrap(True)
+
+        self.summary_text = QPlainTextEdit(details_group)
+        self.summary_text.setObjectName("dashboard_summary_text")
+        self.summary_text.setReadOnly(True)
+        self.summary_text.setPlaceholderText(
+            "Select a Run to inspect its available summaries."
+        )
+
+        details_layout.addWidget(self.run_details_label)
+        details_layout.addWidget(self.summary_text, 1)
+
+        layout.addWidget(title)
+        layout.addWidget(self.status_label)
+        layout.addWidget(runs_group, 2)
+        layout.addWidget(details_group, 3)
+
+    def _connect_signals(self) -> None:
+        self.run_table.itemSelectionChanged.connect(
+            self._handle_selection_changed
+        )
+
+    def set_run_manager(self, run_manager: RunManager) -> None:
+        """Attach the application's RunManager and load its Runs."""
+        if not isinstance(run_manager, RunManager):
+            raise TypeError("run_manager must be a RunManager instance.")
+
+        self._run_manager = run_manager
+        self.refresh_runs()
+
+    def _show_unavailable_state(self) -> None:
+        self.status_label.setText(
+            "Run Manager is not connected. No Run data is available."
+        )
+        self.run_details_label.setText("No Run selected.")
+        self.summary_text.clear()
+
+    @staticmethod
+    def _format_sol_range(record: RunRecord) -> str:
+        start_sol = record.metadata.start_sol
+        end_sol = record.metadata.end_sol
+
+        if start_sol is None or end_sol is None:
+            return "Not specified"
+
+        if start_sol == end_sol:
+            return str(start_sol)
+
+        return f"{start_sol} – {end_sol}"
+
+    @staticmethod
+    def _format_datetime(value: datetime | None) -> str:
+        if value is None:
+            return "Not available"
+
+        return value.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+    def refresh_runs(self) -> None:
+        """Reload the Run list without executing or modifying any Run."""
+        manager = self._run_manager
+
+        if manager is None:
+            self._show_unavailable_state()
+            return
+
+        selected_run_id = self._selected_run_id
+
+        try:
+            records = list(manager.list_runs())
+        except Exception as exc:
+            self.status_label.setText(
+                f"Unable to load Runs: {type(exc).__name__}: {exc}"
+            )
+            self.run_table.setRowCount(0)
+            self._records_by_id.clear()
+            self._selected_run_id = None
+            self.run_details_label.setText("Run list could not be loaded.")
+            self.summary_text.clear()
+            return
+
+        records.sort(
+            key=lambda record: record.metadata.created_at,
+            reverse=True,
+        )
+
+        self._records_by_id = {
+            record.run_id: record
+            for record in records
+        }
+
+        self.run_table.blockSignals(True)
+        self.run_table.setRowCount(len(records))
+
+        selected_row: int | None = None
+
+        for row, record in enumerate(records):
+            run_id_item = QTableWidgetItem(record.run_id)
+            run_id_item.setData(
+                Qt.ItemDataRole.UserRole,
+                record.run_id,
+            )
+
+            status_item = QTableWidgetItem(record.status.value)
+            range_item = QTableWidgetItem(
+                self._format_sol_range(record)
+            )
+            created_item = QTableWidgetItem(
+                self._format_datetime(record.metadata.created_at)
+            )
+
+            self.run_table.setItem(row, 0, run_id_item)
+            self.run_table.setItem(row, 1, status_item)
+            self.run_table.setItem(row, 2, range_item)
+            self.run_table.setItem(row, 3, created_item)
+
+            if record.run_id == selected_run_id:
+                selected_row = row
+
+        self.run_table.blockSignals(False)
+
+        if not records:
+            self._selected_run_id = None
+            self.status_label.setText("No analysis Runs are available.")
+            self.run_details_label.setText("No Run selected.")
+            self.summary_text.clear()
+            return
+
+        self.status_label.setText(
+            f"{len(records)} Run(s) available."
+        )
+
+        if selected_row is None:
+            selected_row = 0
+
+        self.run_table.selectRow(selected_row)
+        self._display_selected_run()
+
+    def _handle_selection_changed(self) -> None:
+        self._display_selected_run()
+
+    def _display_selected_run(self) -> None:
+        row = self.run_table.currentRow()
+
+        if row < 0:
+            self._selected_run_id = None
+            self.run_details_label.setText("No Run selected.")
+            self.summary_text.clear()
+            return
+
+        item = self.run_table.item(row, 0)
+
+        if item is None:
+            self._selected_run_id = None
+            self.run_details_label.setText("No Run selected.")
+            self.summary_text.clear()
+            return
+
+        run_id = item.data(Qt.ItemDataRole.UserRole)
+
+        if not isinstance(run_id, str):
+            self._selected_run_id = None
+            self.run_details_label.setText("Invalid Run selection.")
+            self.summary_text.clear()
+            return
+
+        record = self._records_by_id.get(run_id)
+
+        if record is None:
+            self._selected_run_id = None
+            self.run_details_label.setText(
+                "The selected Run is no longer available."
+            )
+            self.summary_text.clear()
+            return
+
+        self._selected_run_id = run_id
+        self._display_run_details(record)
+
+    def _display_run_details(self, record: RunRecord) -> None:
+        metadata = record.metadata
+
+        details = (
+            f"Run ID: {record.run_id}\n"
+            f"Status: {record.status.value}\n"
+            f"SOL Range: {self._format_sol_range(record)}\n"
+            f"Created: {self._format_datetime(metadata.created_at)}\n"
+            f"Started: {self._format_datetime(metadata.started_at)}\n"
+            f"Finished: {self._format_datetime(metadata.finished_at)}\n"
+            f"Application Version: "
+            f"{metadata.application_version or 'Not available'}\n"
+            f"Failure Reason: "
+            f"{metadata.failure_reason or 'None'}"
+        )
+
+        self.run_details_label.setText(details)
+
+        sections: list[str] = []
+
+        for title, filename in self.SUMMARY_FILES:
+            sections.append(
+                self._read_summary_section(
+                    record.paths.output_dir,
+                    title,
+                    filename,
+                )
+            )
+
+        execution_summary: Any = metadata.settings.get(
+            "execution_summary"
+        )
+
+        if execution_summary is not None:
+            sections.append(
+                "Execution Summary (metadata.json)\n"
+                "---------------------------------\n"
+                + json.dumps(
+                    execution_summary,
+                    indent=2,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+        else:
+            sections.append(
+                "Execution Summary (metadata.json)\n"
+                "---------------------------------\n"
+                "Not persisted for this Run."
+            )
+
+        self.summary_text.setPlainText("\n\n".join(sections))
+
+    @staticmethod
+    def _read_summary_section(
+        output_dir: Path,
+        title: str,
+        filename: str,
+    ) -> str:
+        path = output_dir / filename
+
+        heading = (
+            f"{title} ({filename})\n"
+            f"{'-' * (len(title) + len(filename) + 3)}"
+        )
+
+        if not path.is_file():
+            return heading + "\nNot generated or not available."
+
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            return (
+                heading
+                + "\nUnable to read this artifact: "
+                + f"{type(exc).__name__}: {exc}"
+            )
+
+        return (
+            heading
+            + "\n"
+            + json.dumps(
+                payload,
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
