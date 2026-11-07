@@ -1309,3 +1309,128 @@ def test_report_schema_keeps_categories_separate():
         "measurement_uncertainty"
         != "range_check"
     )
+
+# --------------------------------------------------
+# SOL range summary
+# --------------------------------------------------
+
+def test_build_summary_supports_selected_sol_range():
+    rows = [
+        {
+            "sol_number": 100,
+            "analysis_status": "analysed",
+            "field_type": "quality_field_candidate",
+            "total_rows": 5,
+            "missing_count": 1,
+            "notes": "Column mapping: header_exact_match.",
+        },
+        {
+            "sol_number": 101,
+            "analysis_status": "analysed",
+            "field_type": "range_check",
+            "total_rows": 5,
+            "missing_count": 0,
+            "below_valid_minimum": 1,
+            "above_valid_maximum": 0,
+            "notes": "Column mapping: header_exact_match.",
+        },
+        {
+            "sol_number": 102,
+            "analysis_status": "analysed",
+            "field_type": "quality_field_candidate",
+            "total_rows": 5,
+            "missing_count": 0,
+            "notes": "Column mapping: header_exact_match.",
+        },
+    ]
+
+    full_summary = qa.build_summary(rows)
+
+    range_summary = qa.build_summary(
+        rows,
+        start_sol=100,
+        end_sol=101,
+    )
+
+    assert full_summary["report_row_count"] == 3
+    assert range_summary["report_row_count"] == 2
+
+    assert range_summary["start_sol"] == 100
+    assert range_summary["end_sol"] == 101
+
+    assert range_summary["quality_field_candidate_reports"] == 1
+    assert range_summary["range_check_reports"] == 1
+
+    # Original reports must remain unchanged.
+    assert len(rows) == 3
+
+
+@pytest.mark.parametrize(
+    ("start_sol", "end_sol", "expected_count"),
+    [
+        (101, None, 2),
+        (None, 101, 2),
+    ],
+)
+def test_build_summary_supports_single_sol_bound(
+    start_sol,
+    end_sol,
+    expected_count,
+):
+    rows = [
+        {
+            "sol_number": 100,
+            "analysis_status": "analysed",
+            "field_type": "quality_field_candidate",
+            "total_rows": 1,
+            "missing_count": 0,
+            "notes": "",
+        },
+        {
+            "sol_number": 101,
+            "analysis_status": "analysed",
+            "field_type": "quality_field_candidate",
+            "total_rows": 1,
+            "missing_count": 0,
+            "notes": "",
+        },
+        {
+            "sol_number": 102,
+            "analysis_status": "analysed",
+            "field_type": "quality_field_candidate",
+            "total_rows": 1,
+            "missing_count": 0,
+            "notes": "",
+        },
+    ]
+
+    summary = qa.build_summary(
+        rows,
+        start_sol=start_sol,
+        end_sol=end_sol,
+    )
+
+    assert summary["report_row_count"] == expected_count
+
+
+@pytest.mark.parametrize(
+    ("start_sol", "end_sol"),
+    [
+        (102, 100),
+        (-1, 100),
+        (100, -1),
+        (True, 100),
+        (100, False),
+        (100.5, 102),
+    ],
+)
+def test_build_summary_rejects_invalid_sol_range(
+    start_sol,
+    end_sol,
+):
+    with pytest.raises((TypeError, ValueError)):
+        qa.build_summary(
+            [],
+            start_sol=start_sol,
+            end_sol=end_sol,
+        )

@@ -530,3 +530,140 @@ def test_run_analysis_rejects_invalid_tolerance(
             metadata_records=[],
             tolerance=tolerance,
         )
+# --------------------------------------------------
+# SOL range summary
+# --------------------------------------------------
+
+def test_build_summary_supports_selected_sol_range():
+    file_reports = [
+        {
+            "sol_number": 100,
+            "analysis_status": "analysed",
+            "notes": "Column mapping: header_exact_match.",
+        },
+        {
+            "sol_number": 101,
+            "analysis_status": "analysed",
+            "notes": "Column mapping: header_exact_match.",
+        },
+        {
+            "sol_number": 102,
+            "analysis_status": "read_error",
+            "notes": "",
+        },
+    ]
+
+    pair_reports = [
+        {
+            "sol_number": 100,
+            "comparison_status": "analysed",
+            "matched_timestamps": 3,
+        },
+        {
+            "sol_number": 101,
+            "comparison_status": "no_temporal_overlap",
+            "matched_timestamps": 0,
+        },
+        {
+            "sol_number": 102,
+            "comparison_status": "analysed",
+            "matched_timestamps": 2,
+        },
+    ]
+
+    full_summary = analyzer.build_summary(
+        file_reports,
+        pair_reports,
+        tolerance=1.0,
+    )
+
+    range_summary = analyzer.build_summary(
+        file_reports,
+        pair_reports,
+        tolerance=1.0,
+        start_sol=100,
+        end_sol=101,
+    )
+
+    assert full_summary["total_files"] == 3
+    assert full_summary["total_product_pairs"] == 3
+
+    assert range_summary["start_sol"] == 100
+    assert range_summary["end_sol"] == 101
+
+    assert range_summary["total_files"] == 2
+    assert range_summary["analysed_files"] == 2
+
+    assert range_summary["total_product_pairs"] == 2
+    assert range_summary["analysed_pairs"] == 1
+    assert range_summary["pairs_with_matches"] == 1
+
+    # Original reports must remain unchanged.
+    assert len(file_reports) == 3
+    assert len(pair_reports) == 3
+
+
+@pytest.mark.parametrize(
+    ("start_sol", "end_sol", "expected_files"),
+    [
+        (101, None, 2),
+        (None, 101, 2),
+    ],
+)
+def test_build_summary_supports_single_sol_bound(
+    start_sol,
+    end_sol,
+    expected_files,
+):
+    file_reports = [
+        {
+            "sol_number": 100,
+            "analysis_status": "analysed",
+            "notes": "",
+        },
+        {
+            "sol_number": 101,
+            "analysis_status": "analysed",
+            "notes": "",
+        },
+        {
+            "sol_number": 102,
+            "analysis_status": "analysed",
+            "notes": "",
+        },
+    ]
+
+    summary = analyzer.build_summary(
+        file_reports,
+        [],
+        tolerance=1.0,
+        start_sol=start_sol,
+        end_sol=end_sol,
+    )
+
+    assert summary["total_files"] == expected_files
+
+
+@pytest.mark.parametrize(
+    ("start_sol", "end_sol"),
+    [
+        (102, 100),
+        (-1, 100),
+        (100, -1),
+        (True, 100),
+        (100, False),
+        (100.5, 102),
+    ],
+)
+def test_build_summary_rejects_invalid_sol_range(
+    start_sol,
+    end_sol,
+):
+    with pytest.raises((TypeError, ValueError)):
+        analyzer.build_summary(
+            [],
+            [],
+            tolerance=1.0,
+            start_sol=start_sol,
+            end_sol=end_sol,
+        )
