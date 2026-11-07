@@ -35,7 +35,7 @@ class ComparisonDashboard(QWidget):
         ("Coverage", "coverage_summary.json"),
         ("Quality", "quality_summary.json"),
         ("Synchronization", "synchronization_summary.json"),
-        ("Ranking", "period_ranking_summary.json"),
+        ("Ranking", "period_ranking_full_summary.json"),
     )
 
     STRUCTURAL_MATCH_STATUS = "Structural match only"

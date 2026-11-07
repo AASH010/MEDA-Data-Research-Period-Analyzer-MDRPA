@@ -1,4 +1,3 @@
-
 """Read-only dashboard for browsing and comparing analysis Runs."""
 
 from __future__ import annotations
@@ -39,16 +38,40 @@ class DashboardView(QWidget):
     """Browse persisted Runs and their read-only analysis artifacts."""
 
     SUMMARY_FILES = (
-        ("Coverage Summary", "coverage_summary.json"),
-        ("Quality Summary", "quality_summary.json"),
-        ("Synchronization Summary", "synchronization_summary.json"),
-        ("Period Ranking Summary", "period_ranking_summary.json"),
+        ("Coverage Summary — Full Dataset", "coverage_summary.json"),
+        (
+            "Coverage Summary — Selected Range",
+            "coverage_range_summary.json",
+        ),
+        ("Quality Summary — Full Dataset", "quality_summary.json"),
+        (
+            "Quality Summary — Selected Range",
+            "quality_range_summary.json",
+        ),
+        (
+            "Synchronization Summary — Full Dataset",
+            "synchronization_summary.json",
+        ),
+        (
+            "Synchronization Summary — Selected Range",
+            "synchronization_range_summary.json",
+        ),
+        (
+            "Period Ranking Summary — Full Dataset",
+            "period_ranking_full_summary.json",
+        ),
+        (
+            "Period Ranking Summary — Selected Range",
+            "period_ranking_summary.json",
+        ),
     )
 
     QUALITY_REPORT_FILE = "quality_field_report.csv"
     SYNCHRONIZATION_FILE_REPORT = "synchronization_file_report.csv"
     SYNCHRONIZATION_PAIR_REPORT = "synchronization_pair_report.csv"
+
     RANKING_REPORT_FILE = "period_ranking.csv"
+    FULL_RANKING_REPORT_FILE = "period_ranking_full.csv"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -80,19 +103,62 @@ class DashboardView(QWidget):
 
     @property
     def coverage_dashboard(self) -> CoverageDashboard:
+        """Return the Full Dataset coverage dashboard."""
         return self._coverage_dashboard
 
     @property
     def quality_dashboard(self) -> QualityDashboard:
+        """Return the Full Dataset quality dashboard."""
         return self._quality_dashboard
 
     @property
     def synchronization_dashboard(self) -> SynchronizationDashboard:
+        """Return the Full Dataset synchronization dashboard."""
         return self._synchronization_dashboard
 
     @property
     def ranking_dashboard(self) -> RankingDashboard:
+        """Return the Full Dataset ranking dashboard."""
         return self._ranking_dashboard
+
+    def _create_analysis_page(
+        self,
+        parent: QWidget,
+    ) -> tuple[
+        QWidget,
+        CoverageDashboard,
+        QualityDashboard,
+        SynchronizationDashboard,
+        RankingDashboard,
+    ]:
+        """Create one range-specific page containing all analyzer views."""
+        page = QWidget(parent)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        tabs = QTabWidget(page)
+        tabs.setObjectName("dashboard_analyzer_tabs")
+
+        coverage = CoverageDashboard(tabs)
+        quality = QualityDashboard(tabs)
+        synchronization = SynchronizationDashboard(tabs)
+        ranking = RankingDashboard(tabs)
+
+        tabs.addTab(coverage, "Coverage")
+        tabs.addTab(quality, "Quality")
+        tabs.addTab(synchronization, "Synchronization")
+        tabs.addTab(ranking, "Ranking")
+
+        layout.addWidget(tabs)
+
+        return (
+            page,
+            coverage,
+            quality,
+            synchronization,
+            ranking,
+        )
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -144,21 +210,27 @@ class DashboardView(QWidget):
             "Select a Run to inspect its available summaries."
         )
 
-        self._coverage_dashboard = CoverageDashboard(self)
-        self._quality_dashboard = QualityDashboard(self)
-        self._synchronization_dashboard = SynchronizationDashboard(self)
-        self._ranking_dashboard = RankingDashboard(self)
+        (
+            full_page,
+            self._coverage_dashboard,
+            self._quality_dashboard,
+            self._synchronization_dashboard,
+            self._ranking_dashboard,
+        ) = self._create_analysis_page(details_group)
 
+        (
+            selected_page,
+            self._coverage_range_dashboard,
+            self._quality_range_dashboard,
+            self._synchronization_range_dashboard,
+            self._ranking_range_dashboard,
+        ) = self._create_analysis_page(details_group)
+        self._selected_range_page = selected_page
         self.analysis_tabs = QTabWidget(details_group)
         self.analysis_tabs.setObjectName("dashboard_analysis_tabs")
         self.analysis_tabs.addTab(self.summary_text, "Run Summary")
-        self.analysis_tabs.addTab(self._coverage_dashboard, "Coverage")
-        self.analysis_tabs.addTab(self._quality_dashboard, "Quality")
-        self.analysis_tabs.addTab(
-            self._synchronization_dashboard,
-            "Synchronization",
-        )
-        self.analysis_tabs.addTab(self._ranking_dashboard, "Ranking")
+        self.analysis_tabs.addTab(full_page, "Full Dataset")
+        self.analysis_tabs.addTab(selected_page, "Selected Range")
 
         details_layout.addWidget(self.run_details_label)
         details_layout.addWidget(self.analysis_tabs, 1)
@@ -214,13 +286,37 @@ class DashboardView(QWidget):
         self.summary_text.clear()
         self._comparison_dashboard.set_runs(())
         self._clear_analysis_dashboards()
+        self._set_selected_range_tab_visible(False)
 
     def _clear_analysis_dashboards(self) -> None:
-        """Reset all visualization widgets to their unavailable states."""
-        self._coverage_dashboard.reset()
-        self._quality_dashboard.reset()
-        self._synchronization_dashboard.reset()
-        self._ranking_dashboard.reset()
+        """Reset all Full Dataset and Selected Range dashboard widgets."""
+        dashboards = (
+            self._coverage_dashboard,
+            self._quality_dashboard,
+            self._synchronization_dashboard,
+            self._ranking_dashboard,
+            self._coverage_range_dashboard,
+            self._quality_range_dashboard,
+            self._synchronization_range_dashboard,
+            self._ranking_range_dashboard,
+        )
+
+        for dashboard in dashboards:
+            dashboard.reset()
+
+def _set_selected_range_tab_visible(self, visible: bool) -> None:
+    """Show Selected Range only when it represents a partial range."""
+    selected_page = self._selected_range_page
+    selected_index = self.analysis_tabs.indexOf(selected_page)
+
+    if visible:
+        if selected_index < 0:
+            self.analysis_tabs.addTab(
+                selected_page,
+                "Selected Range",
+            )
+    elif selected_index >= 0:
+        self.analysis_tabs.removeTab(selected_index)
 
     @staticmethod
     def _format_sol_range(record: RunRecord) -> str:
@@ -265,6 +361,7 @@ class DashboardView(QWidget):
             self.summary_text.clear()
             self._comparison_dashboard.set_runs(())
             self._clear_analysis_dashboards()
+            self._set_selected_range_tab_visible(False)
             return
 
         records.sort(
@@ -315,6 +412,7 @@ class DashboardView(QWidget):
             self.run_details_label.setText("No Run selected.")
             self.summary_text.clear()
             self._clear_analysis_dashboards()
+            self._set_selected_range_tab_visible(False)
             return
 
         self.status_label.setText(f"{len(records)} Run(s) available.")
@@ -336,6 +434,7 @@ class DashboardView(QWidget):
             self.run_details_label.setText("No Run selected.")
             self.summary_text.clear()
             self._clear_analysis_dashboards()
+            self._set_selected_range_tab_visible(False)
             return
 
         item = self.run_table.item(row, 0)
@@ -345,6 +444,7 @@ class DashboardView(QWidget):
             self.run_details_label.setText("No Run selected.")
             self.summary_text.clear()
             self._clear_analysis_dashboards()
+            self._set_selected_range_tab_visible(False)
             return
 
         run_id = item.data(Qt.ItemDataRole.UserRole)
@@ -354,6 +454,7 @@ class DashboardView(QWidget):
             self.run_details_label.setText("Invalid Run selection.")
             self.summary_text.clear()
             self._clear_analysis_dashboards()
+            self._set_selected_range_tab_visible(False)
             return
 
         record = self._records_by_id.get(run_id)
@@ -365,6 +466,7 @@ class DashboardView(QWidget):
             )
             self.summary_text.clear()
             self._clear_analysis_dashboards()
+            self._set_selected_range_tab_visible(False)
             return
 
         self._selected_run_id = run_id
@@ -424,10 +526,68 @@ class DashboardView(QWidget):
 
         self.summary_text.setPlainText("\n\n".join(sections))
 
+    @staticmethod
+    def _read_json_object(path: Path) -> dict[str, Any] | None:
+        """Read a JSON object without raising file or decoding errors."""
+        if not path.is_file():
+            return None
+
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+        return payload if isinstance(payload, dict) else None
+
+    @classmethod
+    def _has_partial_selected_range(
+        cls,
+        output_dir: Path,
+    ) -> bool:
+        """Return whether the persisted selected range differs from full data."""
+        full_summary = cls._read_json_object(
+            output_dir / "coverage_summary.json"
+        )
+        selected_summary = cls._read_json_object(
+            output_dir / "coverage_range_summary.json"
+        )
+
+        if full_summary is None or selected_summary is None:
+            return False
+
+        full_start = full_summary.get("start_sol")
+        full_end = full_summary.get("end_sol")
+        selected_start = selected_summary.get("start_sol")
+        selected_end = selected_summary.get("end_sol")
+
+        bounds = (
+            full_start,
+            full_end,
+            selected_start,
+            selected_end,
+        )
+
+        if any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in bounds
+        ):
+            return False
+
+        return (
+            selected_start != full_start
+            or selected_end != full_end
+        )
+
     def _load_analysis_dashboards(self, record: RunRecord) -> None:
-        """Load only artifacts persisted inside the selected Run directory."""
+        """Load Full Dataset and Selected Range artifacts for one Run."""
         output_dir = record.paths.output_dir
 
+        # Full Dataset dashboards.
         self._coverage_dashboard.load_summary_file(
             output_dir / "coverage_summary.json"
         )
@@ -444,8 +604,33 @@ class DashboardView(QWidget):
         )
 
         self._ranking_dashboard.load_artifacts(
+            output_dir / "period_ranking_full_summary.json",
+            output_dir / self.FULL_RANKING_REPORT_FILE,
+        )
+
+        # Selected Range dashboards.
+        self._coverage_range_dashboard.load_summary_file(
+            output_dir / "coverage_range_summary.json"
+        )
+
+        self._quality_range_dashboard.load_artifacts(
+            output_dir / "quality_range_summary.json",
+            output_dir / self.QUALITY_REPORT_FILE,
+        )
+
+        self._synchronization_range_dashboard.load_artifacts(
+            output_dir / "synchronization_range_summary.json",
+            output_dir / self.SYNCHRONIZATION_FILE_REPORT,
+            output_dir / self.SYNCHRONIZATION_PAIR_REPORT,
+        )
+
+        self._ranking_range_dashboard.load_artifacts(
             output_dir / "period_ranking_summary.json",
             output_dir / self.RANKING_REPORT_FILE,
+        )
+
+        self._set_selected_range_tab_visible(
+            self._has_partial_selected_range(output_dir)
         )
 
     @staticmethod
