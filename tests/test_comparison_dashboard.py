@@ -207,6 +207,78 @@ def test_compare_reads_shared_persisted_numeric_metrics(
     )
 
 
+def test_ranking_comparison_uses_full_dataset_summary(
+    comparison_dashboard,
+    run_manager,
+):
+    first = create_completed_run(
+        run_manager,
+        "comparison-ranking-full-1",
+    )
+    second = create_completed_run(
+        run_manager,
+        "comparison-ranking-full-2",
+    )
+
+    write_summary(
+        first,
+        "period_ranking_full_summary.json",
+        {
+            "analyzer": "MEDA Period Ranking Analyzer",
+            "full_dataset_score": 85,
+        },
+    )
+    write_summary(
+        second,
+        "period_ranking_full_summary.json",
+        {
+            "analyzer": "MEDA Period Ranking Analyzer",
+            "full_dataset_score": 92,
+        },
+    )
+
+    # Selected-range summaries must not be used for Run comparison.
+    write_summary(
+        first,
+        "period_ranking_summary.json",
+        {
+            "analyzer": "MEDA Period Ranking Analyzer",
+            "selected_range_score": 30,
+        },
+    )
+    write_summary(
+        second,
+        "period_ranking_summary.json",
+        {
+            "analyzer": "MEDA Period Ranking Analyzer",
+            "selected_range_score": 40,
+        },
+    )
+
+    comparison_dashboard.set_runs((first, second))
+    select_runs(
+        comparison_dashboard,
+        [first.run_id, second.run_id],
+    )
+
+    assert comparison_dashboard.compare_selected_runs() is True
+
+    full_row = find_row(
+        comparison_dashboard,
+        "Ranking",
+        "full_dataset_score",
+    )
+
+    assert full_row["values"][first.run_id] == 85
+    assert full_row["values"][second.run_id] == 92
+
+    assert not any(
+        row["artifact"] == "Ranking"
+        and row["metric"] == "selected_range_score"
+        for row in comparison_dashboard.comparison_rows
+    )
+
+
 def test_missing_artifact_is_not_treated_as_zero(
     comparison_dashboard,
     run_manager,
