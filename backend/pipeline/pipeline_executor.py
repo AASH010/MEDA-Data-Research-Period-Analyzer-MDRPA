@@ -356,6 +356,10 @@ def execute_pipeline_stages(
             output_dir,
             "coverage_summary.json",
         ),
+        "coverage_range_summary": _output_path(
+            output_dir,
+            "coverage_range_summary.json",
+        ),
         "quality": _output_path(
             output_dir,
             "quality_field_report.csv",
@@ -623,6 +627,7 @@ def execute_pipeline_stages(
             gap_factor=config.gap_factor,
         )
 
+        # Detailed coverage remains a full-dataset report.
         coverage_analyzer.save_coverage_csv(
             coverage_reports,
             artifacts["coverage"],
@@ -636,44 +641,107 @@ def execute_pipeline_stages(
             and row.get("sol_number") >= 0
         ]
 
-        if config.start_sol is not None:
-            summary_start = config.start_sol
-            summary_end = config.end_sol
-        else:
-            if not observed_sols:
-                raise ValueError(
-                    "Coverage summary requires at least one valid SOL "
-                    "number in the file inventory when no SOL range "
-                    "was configured."
-                )
+        if not observed_sols:
+            raise ValueError(
+                "Coverage summaries require at least one valid SOL "
+                "number in the file inventory."
+            )
 
-            summary_start = min(observed_sols)
-            summary_end = max(observed_sols)
+        # The full-dataset summary always uses the observed data range,
+        # independently of the user's selected range.
+        observed_start = min(observed_sols)
+        observed_end = max(observed_sols)
 
-        product_summary = coverage_analyzer.build_product_summary(
-            coverage_reports,
-            summary_start,
-            summary_end,
+        full_product_summary = (
+            coverage_analyzer.build_product_summary(
+                coverage_reports,
+                observed_start,
+                observed_end,
+            )
         )
 
-        coverage_summary = {
-            "start_sol": summary_start,
-            "end_sol": summary_end,
+        full_coverage_summary = {
+            "start_sol": observed_start,
+            "end_sol": observed_end,
             "report_count": len(coverage_reports),
-            "products": product_summary,
+            "products": full_product_summary,
         }
 
         coverage_analyzer.save_summary_json(
-            coverage_summary,
+            full_coverage_summary,
             artifacts["coverage_summary"],
+        )
+
+        # Resolve an omitted bound against the observed dataset range.
+        requested_start = (
+            config.start_sol
+            if config.start_sol is not None
+            else observed_start
+        )
+        requested_end = (
+            config.end_sol
+            if config.end_sol is not None
+            else observed_end
+        )
+
+        # Restrict the effective selected range to the observed range.
+        selected_start = max(
+            requested_start,
+            observed_start,
+        )
+        selected_end = min(
+            requested_end,
+            observed_end,
+        )
+
+        if selected_start > selected_end:
+            raise ValueError(
+                "The selected SOL range does not overlap the observed "
+                f"dataset range ({observed_start}-{observed_end})."
+            )
+
+        selected_reports = [
+            report
+            for report in coverage_reports
+            if isinstance(report.get("sol_number"), int)
+            and not isinstance(report.get("sol_number"), bool)
+            and selected_start <= report["sol_number"] <= selected_end
+        ]
+
+        selected_product_summary = (
+            coverage_analyzer.build_product_summary(
+                coverage_reports,
+                selected_start,
+                selected_end,
+            )
+        )
+
+        selected_coverage_summary = {
+            "start_sol": selected_start,
+            "end_sol": selected_end,
+            "report_count": len(selected_reports),
+            "products": selected_product_summary,
+        }
+
+        coverage_analyzer.save_summary_json(
+            selected_coverage_summary,
+            artifacts["coverage_range_summary"],
         )
 
         return (
             (
                 artifacts["coverage"],
                 artifacts["coverage_summary"],
+                artifacts["coverage_range_summary"],
             ),
-            coverage_summary,
+            {
+                "full_dataset": full_coverage_summary,
+                "selected_range": selected_coverage_summary,
+                "observed_range": {
+                    "start_sol": observed_start,
+                    "end_sol": observed_end,
+                },
+            },
             (),
         )
 

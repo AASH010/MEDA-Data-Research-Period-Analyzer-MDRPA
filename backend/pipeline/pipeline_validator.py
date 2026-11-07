@@ -101,14 +101,13 @@ def _validate_sol_range(
     start_sol: int | None,
     end_sol: int | None,
 ) -> None:
+    """Validate independently optional SOL bounds.
+
+    Either bound may be omitted. The executor resolves an omitted
+    bound against the observed SOL range after file discovery.
+    """
     _validate_sol_value(start_sol, "start_sol")
     _validate_sol_value(end_sol, "end_sol")
-
-    if (start_sol is None) != (end_sol is None):
-        raise ValueError(
-            "start_sol and end_sol must either both be provided "
-            "or both be None."
-        )
 
     if (
         start_sol is not None

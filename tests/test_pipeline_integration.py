@@ -32,6 +32,7 @@ EXPECTED_ARTIFACTS = (
     "metadata_inventory.json",
     "coverage_report.csv",
     "coverage_summary.json",
+    "coverage_range_summary.json",
     "quality_field_report.csv",
     "quality_summary.json",
     "synchronization_file_report.csv",
@@ -49,6 +50,14 @@ def read_csv_rows(path: Path) -> list[dict]:
         newline="",
     ) as file:
         return list(csv.DictReader(file))
+
+
+def read_json(path: Path) -> dict:
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as file:
+        return json.load(file)
 
 
 def test_pipeline_runs_all_six_stages_with_fixed_dataset(tmp_path):
@@ -154,13 +163,9 @@ def test_pipeline_runs_all_six_stages_with_fixed_dataset(tmp_path):
     # XML Parser
     # --------------------------------------------------
 
-    metadata_path = output_dir / "metadata_inventory.json"
-
-    with metadata_path.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
-        metadata = json.load(file)
+    metadata = read_json(
+        output_dir / "metadata_inventory.json"
+    )
 
     assert metadata["summary"]["xml_files_discovered"] == 2
     assert metadata["summary"]["successfully_parsed"] == 2
@@ -191,6 +196,74 @@ def test_pipeline_runs_all_six_stages_with_fixed_dataset(tmp_path):
     assert all(
         int(row["parsed_timestamp_count"]) == 3
         for row in coverage_rows
+    )
+
+    # --------------------------------------------------
+    # Full and selected-range coverage summaries
+    # --------------------------------------------------
+
+    full_coverage_summary = read_json(
+        output_dir / "coverage_summary.json"
+    )
+
+    range_coverage_summary = read_json(
+        output_dir / "coverage_range_summary.json"
+    )
+
+    # The fixture contains only SOL100, and the selected
+    # range is also SOL100. Both summaries must therefore
+    # describe exactly the same dataset.
+    assert full_coverage_summary == range_coverage_summary
+
+    assert full_coverage_summary["start_sol"] == 100
+    assert full_coverage_summary["end_sol"] == 100
+
+    assert range_coverage_summary["start_sol"] == 100
+    assert range_coverage_summary["end_sol"] == 100
+
+    assert full_coverage_summary["report_count"] == len(
+        coverage_rows
+    )
+
+    assert range_coverage_summary["report_count"] == len(
+        coverage_rows
+    )
+
+    assert set(full_coverage_summary["products"]) == {
+        "ATS",
+        "PS",
+    }
+
+    assert set(range_coverage_summary["products"]) == {
+        "ATS",
+        "PS",
+    }
+
+    # --------------------------------------------------
+    # Coverage stage summary
+    # --------------------------------------------------
+
+    coverage_stage = next(
+        stage
+        for stage in stage_results
+        if stage.stage_name == "coverage_analyzer"
+    )
+
+    assert coverage_stage.summary is not None
+
+    assert coverage_stage.summary["observed_range"] == {
+        "start_sol": 100,
+        "end_sol": 100,
+    }
+
+    assert (
+        coverage_stage.summary["full_dataset"]
+        == full_coverage_summary
+    )
+
+    assert (
+        coverage_stage.summary["selected_range"]
+        == range_coverage_summary
     )
 
     # --------------------------------------------------
@@ -250,10 +323,9 @@ def test_pipeline_runs_all_six_stages_with_fixed_dataset(tmp_path):
 
     assert ranking_rows
 
-    with (
+    ranking_summary = read_json(
         output_dir / "period_ranking_summary.json"
-    ).open("r", encoding="utf-8") as file:
-        ranking_summary = json.load(file)
+    )
 
     assert ranking_summary["sol_range"] == {
         "start": 100,

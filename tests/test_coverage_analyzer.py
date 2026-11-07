@@ -857,3 +857,211 @@ def test_save_summary_json(tmp_path):
     )
 
     assert loaded == summary
+
+def test_build_product_summary_full_observed_range():
+    reports = [
+        {
+            "product_code": "ATS",
+            "sol_number": 100,
+            "row_count": 10,
+            "numeric_value_count": 20,
+            "parsed_timestamp_count": 10,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 101,
+            "row_count": 5,
+            "numeric_value_count": 10,
+            "parsed_timestamp_count": 5,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 103,
+            "row_count": 7,
+            "numeric_value_count": 14,
+            "parsed_timestamp_count": 7,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+    ]
+
+    summary = analyzer.build_product_summary(
+        reports,
+        100,
+        103,
+    )
+
+    assert summary["ATS"]["present_sols"] == [100, 101, 103]
+    assert summary["ATS"]["missing_sols"] == [102]
+    assert summary["ATS"]["csv_file_count"] == 3
+    assert summary["ATS"]["total_rows"] == 22
+
+
+def test_build_product_summary_partial_range_excludes_outside_sols():
+    reports = [
+        {
+            "product_code": "ATS",
+            "sol_number": 99,
+            "row_count": 100,
+            "numeric_value_count": 200,
+            "parsed_timestamp_count": 100,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 100,
+            "row_count": 10,
+            "numeric_value_count": 20,
+            "parsed_timestamp_count": 10,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 101,
+            "row_count": 5,
+            "numeric_value_count": 10,
+            "parsed_timestamp_count": 5,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 103,
+            "row_count": 7,
+            "numeric_value_count": 14,
+            "parsed_timestamp_count": 7,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 104,
+            "row_count": 200,
+            "numeric_value_count": 400,
+            "parsed_timestamp_count": 200,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        },
+    ]
+
+    summary = analyzer.build_product_summary(
+        reports,
+        100,
+        103,
+    )
+
+    assert summary["ATS"]["present_sols"] == [100, 101, 103]
+    assert summary["ATS"]["missing_sols"] == [102]
+
+    assert summary["ATS"]["csv_file_count"] == 3
+    assert summary["ATS"]["total_rows"] == 22
+    assert summary["ATS"]["total_numeric_values"] == 44
+    assert summary["ATS"]["total_parsed_timestamps"] == 22
+
+
+def test_build_product_summary_range_boundaries_are_inclusive():
+    reports = [
+        {
+            "product_code": "ATS",
+            "sol_number": 99,
+            "row_count": 10,
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 100,
+            "row_count": 10,
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 102,
+            "row_count": 10,
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": 103,
+            "row_count": 10,
+        },
+    ]
+
+    summary = analyzer.build_product_summary(
+        reports,
+        100,
+        102,
+    )
+
+    assert summary["ATS"]["present_sols"] == [100, 102]
+    assert summary["ATS"]["csv_file_count"] == 2
+    assert summary["ATS"]["total_rows"] == 20
+    assert summary["ATS"]["missing_sols"] == [101]
+
+
+def test_build_product_summary_returns_empty_for_unmatched_range():
+    reports = [
+        {
+            "product_code": "ATS",
+            "sol_number": 100,
+            "row_count": 10,
+        },
+        {
+            "product_code": "PS",
+            "sol_number": 101,
+            "row_count": 5,
+        },
+    ]
+
+    summary = analyzer.build_product_summary(
+        reports,
+        200,
+        210,
+    )
+
+    assert summary == {}
+
+
+def test_build_product_summary_ignores_invalid_sol_values():
+    reports = [
+        {
+            "product_code": "ATS",
+            "sol_number": 100,
+            "row_count": 10,
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": True,
+            "row_count": 20,
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": None,
+            "row_count": 30,
+        },
+        {
+            "product_code": "ATS",
+            "sol_number": "101",
+            "row_count": 40,
+        },
+    ]
+
+    summary = analyzer.build_product_summary(
+        reports,
+        100,
+        101,
+    )
+
+    assert summary["ATS"]["present_sols"] == [100]
+    assert summary["ATS"]["csv_file_count"] == 1
+    assert summary["ATS"]["total_rows"] == 10

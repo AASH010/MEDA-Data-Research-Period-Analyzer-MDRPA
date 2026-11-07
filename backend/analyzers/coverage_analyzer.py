@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import argparse
@@ -1133,6 +1134,13 @@ def build_product_summary(
     start_sol: int,
     end_sol: int,
 ) -> dict:
+    """
+    Build product summaries using only reports inside the
+    inclusive Sol range.
+
+    Reports outside the requested range do not contribute to
+    product counts, row totals, timestamp totals, or present Sols.
+    """
 
     products = defaultdict(list)
 
@@ -1140,12 +1148,19 @@ def build_product_summary(
         product = report.get("product_code")
         sol = report.get("sol_number")
 
+        # Sol values produced by analyze_coverage are integers.
+        # Reject booleans explicitly because bool is an int subclass.
         if (
-            product
-            and sol is not None
-            and safe_int(report.get("row_count")) > 0
+            not product
+            or not isinstance(sol, int)
+            or isinstance(sol, bool)
+            or sol < start_sol
+            or sol > end_sol
+            or safe_int(report.get("row_count")) <= 0
         ):
-            products[product].append(report)
+            continue
+
+        products[product].append(report)
 
     summaries = {}
 

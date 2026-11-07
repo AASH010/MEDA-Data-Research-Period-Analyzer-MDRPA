@@ -1,4 +1,4 @@
-
+import json
 from pathlib import Path
 
 import pytest
@@ -127,21 +127,28 @@ def test_invalid_sol_range_is_rejected(tmp_path, start_sol, end_sol):
 
 
 @pytest.mark.parametrize(
-    "config_values",
+    "config_values,expected_start,expected_end",
     [
-        {"start_sol": 10},
-        {"end_sol": 20},
+        ({"start_sol": 10}, 10, None),
+        ({"end_sol": 20}, None, 20),
     ],
 )
-def test_partial_sol_range_is_rejected(tmp_path, config_values):
+def test_partial_sol_range_is_accepted(
+    tmp_path,
+    config_values,
+    expected_start,
+    expected_end,
+):
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
-    with pytest.raises(ValueError):
-        validate_pipeline_config({
-            "input_dir": input_dir,
-            **config_values,
-        })
+    config = validate_pipeline_config({
+        "input_dir": input_dir,
+        **config_values,
+    })
+
+    assert config.start_sol == expected_start
+    assert config.end_sol == expected_end
 
 
 @pytest.mark.parametrize(
@@ -310,19 +317,41 @@ def _write_test_artifact(path, content="test"):
     path.write_text(content, encoding="utf-8")
 
 
-def _patch_successful_analyzers(monkeypatch):
+def _patch_successful_analyzers(
+    monkeypatch,
+    sols=(100,),
+):
     """Replace analyzer work with predictable test doubles."""
+
+    inventory_records = [
+        {
+            "sol_number": sol,
+            "sol_folder": f"SOL{sol}",
+            "filename": f"sample_{sol}.csv",
+            "extension": ".csv",
+            "product_code": "ATS",
+        }
+        for sol in sols
+    ]
+
+    coverage_reports = [
+        {
+            "sol_number": sol,
+            "product_code": "ATS",
+            "row_count": 1,
+            "numeric_value_count": 2,
+            "parsed_timestamp_count": 1,
+            "measurement_coverage_status": (
+                "timestamp_analysis_available"
+            ),
+        }
+        for sol in sols
+    ]
 
     monkeypatch.setattr(
         pipeline_executor.file_discovery,
         "discover_files",
-        lambda input_dir: [
-            {
-                "sol_number": 100,
-                "sol_folder": "SOL100",
-                "filename": "sample.csv",
-            }
-        ],
+        lambda input_dir: inventory_records,
     )
 
     monkeypatch.setattr(
@@ -353,9 +382,9 @@ def _patch_successful_analyzers(monkeypatch):
     monkeypatch.setattr(
         pipeline_executor.coverage_analyzer,
         "analyze_coverage",
-        lambda input_dir, inventory, metadata, gap_factor: [
-            {"sol_number": 100},
-        ],
+        lambda input_dir, inventory, metadata, gap_factor: (
+            coverage_reports
+        ),
     )
 
     monkeypatch.setattr(
@@ -364,17 +393,8 @@ def _patch_successful_analyzers(monkeypatch):
         lambda reports, path: _write_test_artifact(path),
     )
 
-    monkeypatch.setattr(
-        pipeline_executor.coverage_analyzer,
-        "build_product_summary",
-        lambda reports, start, end: {"ATS": {}},
-    )
-
-    monkeypatch.setattr(
-        pipeline_executor.coverage_analyzer,
-        "save_summary_json",
-        lambda summary, path: _write_test_artifact(path),
-    )
+    # Keep the real build_product_summary and save_summary_json.
+    # These are the functions whose range behavior is under test.
 
     monkeypatch.setattr(
         pipeline_executor.quality_analyzer,
@@ -444,6 +464,11 @@ def _patch_successful_analyzers(monkeypatch):
     )
 
 
+def _read_json(path):
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
 # =========================================================
 # Pipeline Executor Tests
 # =========================================================
@@ -490,6 +515,7 @@ def test_pipeline_executor_completes_all_stages(tmp_path, monkeypatch):
         "metadata_inventory.json",
         "coverage_report.csv",
         "coverage_summary.json",
+        "coverage_range_summary.json",
         "quality_field_report.csv",
         "quality_summary.json",
         "synchronization_file_report.csv",
@@ -503,6 +529,257 @@ def test_pipeline_executor_completes_all_stages(tmp_path, monkeypatch):
         artifact = run_paths.output_dir / filename
         assert artifact.is_file()
         assert artifact.parent == run_paths.output_dir
+
+
+def test_pipeline_executor_creates_identical_summaries_without_selected_range(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-default-coverage-range",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(input_dir=input_dir)
+    _patch_successful_analyzers(
+        monkeypatch,
+        sols=(100, 101, 102),
+    )
+
+    result = execute_pipeline_stages(config, run_paths)
+
+    assert result.status == "completed"
+
+    full_summary = _read_json(
+        run_paths.output_dir / "coverage_summary.json"
+    )
+    range_summary = _read_json(
+        run_paths.output_dir / "coverage_range_summary.json"
+    )
+
+    assert full_summary == range_summary
+
+    assert full_summary["start_sol"] == 100
+    assert full_summary["end_sol"] == 102
+    assert full_summary["report_count"] == 3
+
+    assert full_summary["products"]["ATS"]["present_sols"] == [
+        100,
+        101,
+        102,
+    ]
+
+
+def test_pipeline_executor_separates_full_and_selected_range_summaries(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-selected-coverage-range",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+        start_sol=101,
+        end_sol=102,
+    )
+
+    _patch_successful_analyzers(
+        monkeypatch,
+        sols=(100, 101, 102, 103),
+    )
+
+    result = execute_pipeline_stages(config, run_paths)
+
+    assert result.status == "completed"
+
+    full_summary = _read_json(
+        run_paths.output_dir / "coverage_summary.json"
+    )
+    range_summary = _read_json(
+        run_paths.output_dir / "coverage_range_summary.json"
+    )
+
+    # Full dataset summary must retain every observed SOL.
+    assert full_summary["start_sol"] == 100
+    assert full_summary["end_sol"] == 103
+    assert full_summary["report_count"] == 4
+
+    assert full_summary["products"]["ATS"]["present_sols"] == [
+        100,
+        101,
+        102,
+        103,
+    ]
+
+    # Selected range summary must include only the requested SOLs.
+    assert range_summary["start_sol"] == 101
+    assert range_summary["end_sol"] == 102
+    assert range_summary["report_count"] == 2
+
+    assert range_summary["products"]["ATS"]["present_sols"] == [
+        101,
+        102,
+    ]
+
+    assert range_summary["products"]["ATS"]["csv_file_count"] == 2
+    assert range_summary["products"]["ATS"]["total_rows"] == 2
+
+    assert full_summary != range_summary
+
+    coverage_stage = next(
+        stage
+        for stage in result.stage_results
+        if stage.stage_name == "coverage_analyzer"
+    )
+
+    assert coverage_stage.summary["observed_range"] == {
+        "start_sol": 100,
+        "end_sol": 103,
+    }
+
+    assert (
+        coverage_stage.summary["full_dataset"]["report_count"]
+        == 4
+    )
+
+    assert (
+        coverage_stage.summary["selected_range"]["report_count"]
+        == 2
+    )
+
+
+@pytest.mark.parametrize(
+    "start_sol,end_sol,expected_start,expected_end",
+    [
+        (102, None, 102, 103),
+        (None, 101, 100, 101),
+    ],
+)
+def test_pipeline_executor_resolves_partial_selected_range(
+    tmp_path,
+    monkeypatch,
+    start_sol,
+    end_sol,
+    expected_start,
+    expected_end,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        f"executor-partial-range-{expected_start}-{expected_end}",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+        start_sol=start_sol,
+        end_sol=end_sol,
+    )
+
+    _patch_successful_analyzers(
+        monkeypatch,
+        sols=(100, 101, 102, 103),
+    )
+
+    result = execute_pipeline_stages(config, run_paths)
+
+    assert result.status == "completed"
+
+    full_summary = _read_json(
+        run_paths.output_dir / "coverage_summary.json"
+    )
+    range_summary = _read_json(
+        run_paths.output_dir / "coverage_range_summary.json"
+    )
+
+    assert full_summary["start_sol"] == 100
+    assert full_summary["end_sol"] == 103
+    assert full_summary["report_count"] == 4
+
+    assert range_summary["start_sol"] == expected_start
+    assert range_summary["end_sol"] == expected_end
+
+    expected_sols = list(
+        range(expected_start, expected_end + 1)
+    )
+
+    assert range_summary["products"]["ATS"]["present_sols"] == (
+        expected_sols
+    )
+
+    assert range_summary["report_count"] == len(expected_sols)
+
+
+def test_pipeline_executor_rejects_non_overlapping_selected_range(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-non-overlapping-range",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(
+        input_dir=input_dir,
+        start_sol=200,
+        end_sol=300,
+    )
+
+    _patch_successful_analyzers(
+        monkeypatch,
+        sols=(100, 101, 102),
+    )
+
+    result = execute_pipeline_stages(config, run_paths)
+
+    assert result.status == "failed"
+    assert result.successful is False
+
+    coverage_stage = next(
+        stage
+        for stage in result.stage_results
+        if stage.stage_name == "coverage_analyzer"
+    )
+
+    assert coverage_stage.status == "failed"
+    assert coverage_stage.errors
+    assert "does not overlap the observed dataset range" in (
+        coverage_stage.errors[0]
+    )
+
+    # The full-dataset summary is generated before selected-range
+    # validation and remains available for inspection.
+    assert (
+        run_paths.output_dir / "coverage_summary.json"
+    ).is_file()
+
+    # The selected-range summary must not be created for an invalid range.
+    assert not (
+        run_paths.output_dir / "coverage_range_summary.json"
+    ).exists()
+
+    assert [
+        stage.status for stage in result.stage_results
+    ] == [
+        "completed",
+        "completed",
+        "failed",
+        "skipped",
+        "skipped",
+        "skipped",
+    ]
 
 
 def test_pipeline_executor_rejects_unsupported_files(tmp_path, monkeypatch):
