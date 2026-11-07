@@ -1,4 +1,3 @@
-
 """Main window for the MDRPA desktop application."""
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from gui.input_manager.input_manager_view import InputManagerView
 from gui.main_window.menu_bar import MainMenuBar
 from gui.main_window.navigation_sidebar import NavigationSidebar
 from gui.main_window.status_bar import MainStatusBar
+from gui.reports.reports_view import ReportsView
 
 
 __all__ = ["MainWindow"]
@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         ) = None
         self._analysis_center_view: AnalysisCenterView | None = None
         self._dashboard_view: DashboardView | None = None
+        self._reports_view: ReportsView | None = None
 
         self._shutdown_pending = False
         self._allow_close = False
@@ -120,6 +121,11 @@ class MainWindow(QMainWindow):
     def dashboard_view(self) -> DashboardView | None:
         """Return the Dashboard page."""
         return self._dashboard_view
+
+    @property
+    def reports_view(self) -> ReportsView | None:
+        """Return the Reports page."""
+        return self._reports_view
 
     @property
     def selected_input_dir(self) -> Path | None:
@@ -178,6 +184,12 @@ class MainWindow(QMainWindow):
         ):
             self._dashboard_view.set_run_manager(run_manager)
 
+        if (
+            self._reports_view is not None
+            and isinstance(run_manager, RunManager)
+        ):
+            self._reports_view.set_run_manager(run_manager)
+
         self._connect_analysis_controller(controller)
 
     def _connect_analysis_controller(
@@ -215,6 +227,9 @@ class MainWindow(QMainWindow):
         controller.thread_finished.connect(
             self._refresh_dashboard
         )
+        controller.thread_finished.connect(
+            self._refresh_reports
+        )
 
         if self._analysis_center_view is not None:
             controller.started.connect(
@@ -249,6 +264,11 @@ class MainWindow(QMainWindow):
         """Refresh persisted Run information after execution ends."""
         if self._dashboard_view is not None:
             self._dashboard_view.refresh_runs()
+
+    def _refresh_reports(self) -> None:
+        """Refresh persisted report artifacts after execution ends."""
+        if self._reports_view is not None:
+            self._reports_view.refresh_runs()
 
     # ------------------------------------------------------------------
     # Input Manager / Analysis Configuration integration
@@ -513,6 +533,10 @@ class MainWindow(QMainWindow):
                 page = DashboardView(self.page_stack)
                 self._dashboard_view = page
 
+            elif page_key == "reports":
+                page = ReportsView(parent=self.page_stack)
+                self._reports_view = page
+
             else:
                 page = self._create_placeholder_page(
                     page_key,
@@ -577,6 +601,8 @@ class MainWindow(QMainWindow):
 
         if page_key == "dashboard":
             self._refresh_dashboard()
+        elif page_key == "reports":
+            self._refresh_reports()
 
         page_titles = dict(self.PAGE_DEFINITIONS)
         self.application_status_bar.showMessage(
