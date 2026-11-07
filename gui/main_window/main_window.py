@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
 from application.analysis_controller import AnalysisController
 from application.app_config import AppConfig
 from application.version import APP_NAME
+from gui.input_manager.input_manager_view import InputManagerView
 from gui.main_window.menu_bar import MainMenuBar
 from gui.main_window.navigation_sidebar import NavigationSidebar
 from gui.main_window.status_bar import MainStatusBar
@@ -54,6 +57,7 @@ class MainWindow(QMainWindow):
         self.config = config
         self._pages: dict[str, QWidget] = {}
         self._analysis_controller: AnalysisController | None = None
+        self._input_manager_view: InputManagerView | None = None
 
         self._shutdown_pending = False
         self._allow_close = False
@@ -74,6 +78,21 @@ class MainWindow(QMainWindow):
     def analysis_controller(self) -> AnalysisController | None:
         """Return the application analysis controller, if attached."""
         return self._analysis_controller
+
+    @property
+    def input_manager_view(self) -> InputManagerView | None:
+        """Return the Input Manager page."""
+        return self._input_manager_view
+
+    @property
+    def selected_input_dir(self) -> Path | None:
+        """Return the validated input directory, if available."""
+        view = self._input_manager_view
+
+        if view is None or not view.is_validated:
+            return None
+
+        return view.selected_input_dir
 
     def attach_analysis_controller(
         self,
@@ -180,10 +199,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.page_stack, 1)
 
         for page_key, page_title in self.PAGE_DEFINITIONS:
-            page = self._create_placeholder_page(
-                page_key,
-                page_title,
-            )
+            if page_key == "input":
+                page = InputManagerView(self.page_stack)
+                self._input_manager_view = page
+            else:
+                page = self._create_placeholder_page(
+                    page_key,
+                    page_title,
+                )
+
+            # Keep a consistent page objectName contract for navigation.
+            page.setObjectName(f"page_{page_key}")
+
             self._pages[page_key] = page
             self.page_stack.addWidget(page)
 
@@ -307,8 +334,6 @@ class MainWindow(QMainWindow):
                 self._shutdown_pending = True
                 self.application_status_bar.shutdown_pending()
 
-                # The controller emits this only after QThread has stopped
-                # and its internal references have been cleared.
                 if controller.is_running:
                     controller.request_cancel()
 
