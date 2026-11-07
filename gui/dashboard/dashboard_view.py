@@ -1,5 +1,5 @@
 
-"""Read-only dashboard for browsing completed and previous analysis runs."""
+"""Read-only dashboard for browsing and comparing analysis Runs."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QPlainTextEdit,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -23,13 +23,14 @@ from PySide6.QtWidgets import (
 
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_registry import RunRecord
+from gui.dashboard.comparison_dashboard import ComparisonDashboard
 
 
 __all__ = ["DashboardView"]
 
 
 class DashboardView(QWidget):
-    """Browse persisted Runs and display their existing JSON summaries."""
+    """Browse persisted Runs and compare their existing artifacts."""
 
     SUMMARY_FILES = (
         ("Coverage Summary", "coverage_summary.json"),
@@ -60,6 +61,11 @@ class DashboardView(QWidget):
     def selected_run_id(self) -> str | None:
         """Return the currently selected Run identifier."""
         return self._selected_run_id
+
+    @property
+    def comparison_dashboard(self) -> ComparisonDashboard:
+        """Return the embedded multi-Run comparison page."""
+        return self._comparison_dashboard
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -115,10 +121,20 @@ class DashboardView(QWidget):
         details_layout.addWidget(self.run_details_label)
         details_layout.addWidget(self.summary_text, 1)
 
+        self._comparison_dashboard = ComparisonDashboard(self)
+
+        self.details_tabs = QTabWidget(self)
+        self.details_tabs.setObjectName("dashboard_details_tabs")
+        self.details_tabs.addTab(details_group, "Run Details")
+        self.details_tabs.addTab(
+            self._comparison_dashboard,
+            "Compare Runs",
+        )
+
         layout.addWidget(title)
         layout.addWidget(self.status_label)
         layout.addWidget(runs_group, 2)
-        layout.addWidget(details_group, 3)
+        layout.addWidget(self.details_tabs, 3)
 
     def _connect_signals(self) -> None:
         self.run_table.itemSelectionChanged.connect(
@@ -139,6 +155,7 @@ class DashboardView(QWidget):
         )
         self.run_details_label.setText("No Run selected.")
         self.summary_text.clear()
+        self._comparison_dashboard.set_runs(())
 
     @staticmethod
     def _format_sol_range(record: RunRecord) -> str:
@@ -161,7 +178,7 @@ class DashboardView(QWidget):
         return value.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
     def refresh_runs(self) -> None:
-        """Reload the Run list without executing or modifying any Run."""
+        """Reload Runs and comparison choices without executing analysis."""
         manager = self._run_manager
 
         if manager is None:
@@ -181,6 +198,7 @@ class DashboardView(QWidget):
             self._selected_run_id = None
             self.run_details_label.setText("Run list could not be loaded.")
             self.summary_text.clear()
+            self._comparison_dashboard.set_runs(())
             return
 
         records.sort(
@@ -192,6 +210,8 @@ class DashboardView(QWidget):
             record.run_id: record
             for record in records
         }
+
+        self._comparison_dashboard.set_runs(records)
 
         self.run_table.blockSignals(True)
         self.run_table.setRowCount(len(records))
