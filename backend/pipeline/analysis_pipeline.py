@@ -254,12 +254,8 @@ class AnalysisPipeline:
         A failed Run transitions through:
             PENDING -> RUNNING -> FAILED
 
-        Cancellation is cooperative. An analyzer that has already
-        started is allowed to finish before the executor stops the
-        remaining stages.
-
-        Execution details are persisted in metadata.json for cancelled
-        and failed executions.
+        Execution details are persisted in metadata.json for completed,
+        cancelled, and failed executions.
 
         A generated Run ID requires a configured SOL range, following
         the existing RunManager contract. A caller may provide run_id
@@ -379,6 +375,13 @@ class AnalysisPipeline:
                 )
 
             if execution.successful:
+                # Persist the execution details before completing the Run
+                # so the terminal metadata contains the full summary.
+                self._persist_execution_summary(
+                    record,
+                    execution,
+                )
+
                 record = self.run_manager.complete_run(
                     record.run_id
                 )

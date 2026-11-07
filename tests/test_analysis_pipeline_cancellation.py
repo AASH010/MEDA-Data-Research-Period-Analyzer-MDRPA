@@ -148,13 +148,26 @@ def test_cancelled_execution_updates_run_status_and_metadata(
     assert summary["stages"][1]["status"] == "cancelled"
 
 
-def test_cancel_event_defaults_to_none_and_preserves_success(
+def test_successful_execution_persists_summary_and_survives_restart(
     pipeline_context,
     monkeypatch,
 ):
     pipeline, manager, config = pipeline_context
 
     received = {}
+
+    now = "2026-01-01T00:00:00+00:00"
+    output_path = manager.runs_root / "normal-run" / "output.json"
+
+    successful_stage = PipelineStageResult(
+        stage_name="file_discovery",
+        status="completed",
+        started_at=now,
+        finished_at=now,
+        output_paths=(output_path,),
+        warnings=(),
+        errors=(),
+    )
 
     def fake_execute_pipeline_stages(
         validated_config,
@@ -167,7 +180,7 @@ def test_cancel_event_defaults_to_none_and_preserves_success(
         return PipelineExecutionResult(
             run_id=run_paths.run_id,
             status="completed",
-            stage_results=(),
+            stage_results=(successful_stage,),
         )
 
     monkeypatch.setattr(
@@ -192,7 +205,34 @@ def test_cancel_event_defaults_to_none_and_preserves_success(
     )
 
     assert persisted.status == RunStatus.COMPLETED.value
-    assert "execution_summary" not in persisted.settings
+
+    summary = persisted.settings["execution_summary"]
+
+    assert summary["status"] == "completed"
+    assert summary["error"] is None
+    assert len(summary["stages"]) == 1
+
+    stage = summary["stages"][0]
+
+    assert stage["stage_name"] == "file_discovery"
+    assert stage["status"] == "completed"
+    assert stage["started_at"] == now
+    assert stage["finished_at"] == now
+    assert stage["output_paths"] == [str(output_path)]
+    assert stage["warnings"] == []
+    assert stage["errors"] == []
+
+    recovered_manager = RunManager(
+        runs_root=manager.runs_root,
+    )
+
+    recovered = recovered_manager.get_run("normal-run")
+
+    assert recovered.status is RunStatus.COMPLETED
+    assert (
+        recovered.metadata.settings["execution_summary"]
+        == summary
+    )
 
 
 def test_invalid_cancel_event_is_rejected_before_run_creation(
