@@ -1,8 +1,9 @@
-
 """Integration tests for Dashboard and application composition."""
 
 from __future__ import annotations
 
+import csv
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -60,6 +61,226 @@ def main_window(qapp, application_paths):
     window.close()
 
 
+def create_completed_run(
+    manager: RunManager,
+    run_id: str,
+    start_sol: int = 100,
+    end_sol: int = 110,
+):
+    record = manager.create_run(
+        run_id=run_id,
+        start_sol=start_sol,
+        end_sol=end_sol,
+    )
+    manager.start_run(record.run_id)
+    return manager.complete_run(record.run_id)
+
+
+def write_json(path, payload):
+    path.write_text(
+        json.dumps(payload, indent=2),
+        encoding="utf-8",
+    )
+
+
+def write_empty_csv(path, columns):
+    with path.open(
+        "w",
+        encoding="utf-8-sig",
+        newline="",
+    ) as file:
+        writer = csv.writer(file)
+        writer.writerow(columns)
+
+
+def write_dashboard_artifacts(record, marker: int) -> None:
+    output = record.paths.output_dir
+
+    write_json(
+        output / "coverage_summary.json",
+        {
+            "start_sol": 100,
+            "end_sol": 110,
+            "report_count": marker,
+            "products": {
+                "ATS": {
+                    "csv_file_count": marker,
+                    "sols_with_rows": marker,
+                    "sols_without_rows": 0,
+                    "total_rows": marker * 10,
+                    "total_numeric_values": marker * 20,
+                    "total_parsed_timestamps": marker * 9,
+                },
+            },
+        },
+    )
+
+    write_json(
+        output / "quality_summary.json",
+        {
+            "analyzer": "MEDA Quality Analyzer",
+            "report_row_count": marker,
+            "analysed_field_reports": marker,
+            "quality_field_reports": marker,
+            "quality_field_candidate_reports": marker,
+            "analysis_status_counts": {
+                "analysed": marker,
+            },
+            "column_mapping_status_counts": {
+                "header_exact_match": marker,
+            },
+            "range_check_reports": marker,
+            "total_values_below_declared_minimum": 0,
+            "total_values_above_declared_maximum": 0,
+        },
+    )
+
+    write_empty_csv(
+        output / "quality_field_report.csv",
+        (
+            "sol_number",
+            "product_code",
+            "csv_file",
+            "field_name",
+            "field_type",
+            "analysis_status",
+            "total_rows",
+            "missing_count",
+            "below_valid_minimum",
+            "above_valid_maximum",
+        ),
+    )
+
+    write_json(
+        output / "synchronization_summary.json",
+        {
+            "analyzer": "MEDA Synchronization Analyzer",
+            "tolerance": 1.0,
+            "total_files": marker,
+            "analysed_files": marker,
+            "unanalysed_files": 0,
+            "file_status_counts": {"analysed": marker},
+            "mapping_status_counts": {"header_exact_match": marker},
+            "total_product_pairs": marker,
+            "analysed_pairs": marker,
+            "pair_status_counts": {"analysed": marker},
+            "pairs_with_matches": marker,
+        },
+    )
+
+    write_empty_csv(
+        output / "synchronization_file_report.csv",
+        (
+            "sol_number",
+            "sol_folder",
+            "product_code",
+            "csv_file",
+            "selected_time_field",
+            "time_kind",
+            "analysis_status",
+            "total_rows",
+            "parsed_timestamps",
+            "missing_timestamps",
+            "invalid_timestamps",
+            "duplicate_timestamps",
+            "out_of_order_timestamps",
+            "median_step",
+            "first_timestamp",
+            "last_timestamp",
+            "notes",
+        ),
+    )
+
+    write_empty_csv(
+        output / "synchronization_pair_report.csv",
+        (
+            "sol_number",
+            "product_1",
+            "file_1",
+            "product_2",
+            "file_2",
+            "comparison_status",
+            "time_kind",
+            "tolerance",
+            "overlap_start",
+            "overlap_end",
+            "overlap_duration",
+            "first_count",
+            "second_count",
+            "matched_timestamps",
+            "first_unmatched",
+            "second_unmatched",
+            "match_rate_first_percent",
+            "match_rate_second_percent",
+            "match_rate_sparser_percent",
+            "mean_match_difference",
+            "max_match_difference",
+            "notes",
+        ),
+    )
+
+    write_json(
+        output / "period_ranking_summary.json",
+        {
+            "analyzer": "MEDA Period Ranker",
+            "ranking_type": "exploratory_comparative",
+            "sol_range": {
+                "start": 100,
+                "end": 110,
+            },
+            "window_size": 10,
+            "total_candidate_windows": 1,
+            "rankable_windows": 1,
+            "unrankable_windows": 0,
+            "comparison_group_count": 1,
+            "ranking_weights": {
+                "data_integrity": 1.0,
+            },
+            "min_metrics": 1,
+            "important_limitations": [
+                "Scores are exploratory indicators.",
+            ],
+        },
+    )
+
+    write_empty_csv(
+        output / "period_ranking.csv",
+        (
+            "rank",
+            "comparison_group",
+            "window_start_sol",
+            "window_end_sol",
+            "window_label",
+            "ranking_status",
+            "is_partial_window",
+            "exploratory_score",
+            "available_metrics",
+            "metrics_used",
+            "total_sols",
+            "file_availability_score",
+            "data_integrity_score",
+            "quality_indicators_score",
+            "synchronization_score",
+            "file_availability_sols",
+            "data_integrity_sols",
+            "quality_indicators_sols",
+            "synchronization_sols",
+            "reasons",
+        ),
+    )
+
+
+def select_run(dashboard: DashboardView, run_id: str) -> None:
+    for row in range(dashboard.run_table.rowCount()):
+        item = dashboard.run_table.item(row, 0)
+
+        if item is not None and item.text() == run_id:
+            dashboard.run_table.selectRow(row)
+            return
+
+    raise AssertionError(f"Run not found in dashboard: {run_id}")
+
+
 def test_dashboard_is_registered_as_dashboard_page(main_window):
     dashboard = main_window.dashboard_view
 
@@ -82,14 +303,12 @@ def test_dashboard_uses_application_run_manager(main_window):
 def test_dashboard_loads_runs_when_page_is_opened(main_window):
     manager = main_window.analysis_controller.pipeline.run_manager
 
-    record = manager.create_run(
-        run_id="dashboard-integration-run",
-        start_sol=100,
-        end_sol=105,
+    record = create_completed_run(
+        manager,
+        "dashboard-integration-run",
+        100,
+        105,
     )
-
-    manager.start_run(record.run_id)
-    manager.complete_run(record.run_id)
 
     main_window.navigate_to("dashboard")
 
@@ -107,10 +326,11 @@ def test_dashboard_refreshes_when_reopened(main_window):
 
     assert main_window.dashboard_view.run_table.rowCount() == 0
 
-    manager.create_run(
-        run_id="dashboard-refresh-run",
-        start_sol=200,
-        end_sol=210,
+    create_completed_run(
+        manager,
+        "dashboard-refresh-run",
+        200,
+        210,
     )
 
     main_window.navigate_to("home")
@@ -133,10 +353,11 @@ def test_dashboard_refreshes_after_controller_thread_finished(
 
     assert dashboard.run_table.rowCount() == 0
 
-    manager.create_run(
-        run_id="dashboard-thread-finished-run",
-        start_sol=300,
-        end_sol=305,
+    create_completed_run(
+        manager,
+        "dashboard-thread-finished-run",
+        300,
+        305,
     )
 
     main_window.analysis_controller.thread_finished.emit()
@@ -171,3 +392,171 @@ def test_dashboard_does_not_start_analysis(main_window):
 
     assert controller.is_active is False
     assert controller.is_running is False
+
+
+def test_dashboard_exposes_all_analysis_visualization_tabs(
+    main_window,
+):
+    dashboard = main_window.dashboard_view
+
+    assert dashboard.analysis_tabs.count() == 5
+    assert dashboard.analysis_tabs.tabText(0) == "Run Summary"
+    assert dashboard.analysis_tabs.tabText(1) == "Coverage"
+    assert dashboard.analysis_tabs.tabText(2) == "Quality"
+    assert dashboard.analysis_tabs.tabText(3) == "Synchronization"
+    assert dashboard.analysis_tabs.tabText(4) == "Ranking"
+
+    assert dashboard.analysis_tabs.widget(1) is (
+        dashboard.coverage_dashboard
+    )
+    assert dashboard.analysis_tabs.widget(2) is (
+        dashboard.quality_dashboard
+    )
+    assert dashboard.analysis_tabs.widget(3) is (
+        dashboard.synchronization_dashboard
+    )
+    assert dashboard.analysis_tabs.widget(4) is (
+        dashboard.ranking_dashboard
+    )
+
+
+def test_dashboard_loads_selected_run_artifacts_into_all_visualizations(
+    main_window,
+):
+    manager = main_window.analysis_controller.pipeline.run_manager
+
+    record = create_completed_run(
+        manager,
+        "dashboard-artifact-integration",
+    )
+    write_dashboard_artifacts(record, marker=7)
+
+    main_window.navigate_to("dashboard")
+    dashboard = main_window.dashboard_view
+
+    assert dashboard.selected_run_id == record.run_id
+
+    assert dashboard.coverage_dashboard.summary is not None
+    assert dashboard.coverage_dashboard.summary["report_count"] == 7
+
+    assert dashboard.quality_dashboard.summary is not None
+    assert dashboard.quality_dashboard.summary["report_row_count"] == 7
+
+    assert dashboard.synchronization_dashboard.summary is not None
+    assert dashboard.synchronization_dashboard.summary["total_files"] == 7
+
+    assert dashboard.ranking_dashboard.summary is not None
+    assert (
+        dashboard.ranking_dashboard.summary["total_candidate_windows"]
+        == 1
+    )
+
+    assert dashboard.quality_dashboard.report_table.rowCount() == 0
+    assert dashboard.synchronization_dashboard.file_table.rowCount() == 0
+    assert dashboard.synchronization_dashboard.pair_table.rowCount() == 0
+    assert dashboard.ranking_dashboard.ranking_table.rowCount() == 0
+
+
+def test_dashboard_switching_runs_reloads_visualizations(
+    main_window,
+):
+    manager = main_window.analysis_controller.pipeline.run_manager
+
+    first = create_completed_run(
+        manager,
+        "dashboard-switch-first",
+    )
+    second = create_completed_run(
+        manager,
+        "dashboard-switch-second",
+    )
+
+    write_dashboard_artifacts(first, marker=3)
+    write_dashboard_artifacts(second, marker=9)
+
+    main_window.navigate_to("dashboard")
+    dashboard = main_window.dashboard_view
+
+    select_run(dashboard, first.run_id)
+
+    assert dashboard.selected_run_id == first.run_id
+    assert dashboard.coverage_dashboard.summary["report_count"] == 3
+    assert dashboard.quality_dashboard.summary["report_row_count"] == 3
+    assert dashboard.synchronization_dashboard.summary["total_files"] == 3
+
+    select_run(dashboard, second.run_id)
+
+    assert dashboard.selected_run_id == second.run_id
+    assert dashboard.coverage_dashboard.summary["report_count"] == 9
+    assert dashboard.quality_dashboard.summary["report_row_count"] == 9
+    assert dashboard.synchronization_dashboard.summary["total_files"] == 9
+
+
+def test_dashboard_missing_artifacts_are_not_carried_from_previous_run(
+    main_window,
+):
+    manager = main_window.analysis_controller.pipeline.run_manager
+
+    populated = create_completed_run(
+        manager,
+        "dashboard-populated-run",
+    )
+    empty = create_completed_run(
+        manager,
+        "dashboard-empty-run",
+    )
+
+    write_dashboard_artifacts(populated, marker=5)
+
+    main_window.navigate_to("dashboard")
+    dashboard = main_window.dashboard_view
+
+    select_run(dashboard, populated.run_id)
+    assert dashboard.coverage_dashboard.summary is not None
+
+    select_run(dashboard, empty.run_id)
+
+    assert dashboard.selected_run_id == empty.run_id
+    assert dashboard.coverage_dashboard.summary is None
+    assert dashboard.quality_dashboard.summary is None
+    assert dashboard.synchronization_dashboard.summary is None
+    assert dashboard.ranking_dashboard.summary is None
+
+
+def test_dashboard_comparison_displays_scope_notice(main_window):
+    dashboard = main_window.dashboard_view
+
+    assert "exploratory" in (
+        dashboard.comparison_notice.text().lower()
+    )
+    assert "scientific meaning" in (
+        dashboard.comparison_notice.text().lower()
+    )
+
+
+def test_dashboard_refresh_preserves_selected_run_and_visualizations(
+    main_window,
+):
+    manager = main_window.analysis_controller.pipeline.run_manager
+
+    first = create_completed_run(
+        manager,
+        "dashboard-preserve-first",
+    )
+    write_dashboard_artifacts(first, marker=6)
+
+    main_window.navigate_to("dashboard")
+    dashboard = main_window.dashboard_view
+
+    assert dashboard.selected_run_id == first.run_id
+    assert dashboard.coverage_dashboard.summary["report_count"] == 6
+
+    create_completed_run(
+        manager,
+        "dashboard-preserve-new",
+    )
+
+    dashboard.refresh_runs()
+
+    assert dashboard.selected_run_id == first.run_id
+    assert dashboard.coverage_dashboard.summary["report_count"] == 6

@@ -24,13 +24,19 @@ from PySide6.QtWidgets import (
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_registry import RunRecord
 from gui.dashboard.comparison_dashboard import ComparisonDashboard
+from gui.dashboard.coverage_dashboard import CoverageDashboard
+from gui.dashboard.quality_dashboard import QualityDashboard
+from gui.dashboard.ranking_dashboard import RankingDashboard
+from gui.dashboard.synchronization_dashboard import (
+    SynchronizationDashboard,
+)
 
 
 __all__ = ["DashboardView"]
 
 
 class DashboardView(QWidget):
-    """Browse persisted Runs and compare their existing artifacts."""
+    """Browse persisted Runs and their read-only analysis artifacts."""
 
     SUMMARY_FILES = (
         ("Coverage Summary", "coverage_summary.json"),
@@ -38,6 +44,11 @@ class DashboardView(QWidget):
         ("Synchronization Summary", "synchronization_summary.json"),
         ("Period Ranking Summary", "period_ranking_summary.json"),
     )
+
+    QUALITY_REPORT_FILE = "quality_field_report.csv"
+    SYNCHRONIZATION_FILE_REPORT = "synchronization_file_report.csv"
+    SYNCHRONIZATION_PAIR_REPORT = "synchronization_pair_report.csv"
+    RANKING_REPORT_FILE = "period_ranking.csv"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -59,13 +70,29 @@ class DashboardView(QWidget):
 
     @property
     def selected_run_id(self) -> str | None:
-        """Return the currently selected Run identifier."""
+        """Return the currently displayed Run identifier."""
         return self._selected_run_id
 
     @property
     def comparison_dashboard(self) -> ComparisonDashboard:
         """Return the embedded multi-Run comparison page."""
         return self._comparison_dashboard
+
+    @property
+    def coverage_dashboard(self) -> CoverageDashboard:
+        return self._coverage_dashboard
+
+    @property
+    def quality_dashboard(self) -> QualityDashboard:
+        return self._quality_dashboard
+
+    @property
+    def synchronization_dashboard(self) -> SynchronizationDashboard:
+        return self._synchronization_dashboard
+
+    @property
+    def ranking_dashboard(self) -> RankingDashboard:
+        return self._ranking_dashboard
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -100,7 +127,6 @@ class DashboardView(QWidget):
         self.run_table.setAlternatingRowColors(True)
         self.run_table.setWordWrap(False)
         self.run_table.horizontalHeader().setStretchLastSection(True)
-
         runs_layout.addWidget(self.run_table)
 
         details_group = QGroupBox("Selected Run Details", self)
@@ -118,10 +144,41 @@ class DashboardView(QWidget):
             "Select a Run to inspect its available summaries."
         )
 
+        self._coverage_dashboard = CoverageDashboard(self)
+        self._quality_dashboard = QualityDashboard(self)
+        self._synchronization_dashboard = SynchronizationDashboard(self)
+        self._ranking_dashboard = RankingDashboard(self)
+
+        self.analysis_tabs = QTabWidget(details_group)
+        self.analysis_tabs.setObjectName("dashboard_analysis_tabs")
+        self.analysis_tabs.addTab(self.summary_text, "Run Summary")
+        self.analysis_tabs.addTab(self._coverage_dashboard, "Coverage")
+        self.analysis_tabs.addTab(self._quality_dashboard, "Quality")
+        self.analysis_tabs.addTab(
+            self._synchronization_dashboard,
+            "Synchronization",
+        )
+        self.analysis_tabs.addTab(self._ranking_dashboard, "Ranking")
+
         details_layout.addWidget(self.run_details_label)
-        details_layout.addWidget(self.summary_text, 1)
+        details_layout.addWidget(self.analysis_tabs, 1)
 
         self._comparison_dashboard = ComparisonDashboard(self)
+
+        self.comparison_notice = QLabel(
+            "Comparison is exploratory: matching numeric JSON paths do not "
+            "guarantee equivalent units, SOL ranges, configurations, or "
+            "scientific meaning. Review each Run's metadata and source "
+            "artifacts before interpreting differences."
+        )
+        self.comparison_notice.setObjectName(
+            "comparison_limitations_notice"
+        )
+        self.comparison_notice.setWordWrap(True)
+
+        comparison_layout = self._comparison_dashboard.layout()
+        if comparison_layout is not None:
+            comparison_layout.insertWidget(0, self.comparison_notice)
 
         self.details_tabs = QTabWidget(self)
         self.details_tabs.setObjectName("dashboard_details_tabs")
@@ -156,6 +213,22 @@ class DashboardView(QWidget):
         self.run_details_label.setText("No Run selected.")
         self.summary_text.clear()
         self._comparison_dashboard.set_runs(())
+        self._clear_analysis_dashboards()
+
+    def _clear_analysis_dashboards(self) -> None:
+        """Reset all visualization widgets to their unavailable states."""
+        self._coverage_dashboard.load_summary_file(
+            Path("__dashboard_no_run__") / "coverage_summary.json"
+        )
+        self._quality_dashboard.load_artifacts(
+            Path("__dashboard_no_run__") / "quality_summary.json"
+        )
+        self._synchronization_dashboard.load_artifacts(
+            Path("__dashboard_no_run__") / "synchronization_summary.json"
+        )
+        self._ranking_dashboard.load_artifacts(
+            Path("__dashboard_no_run__") / "period_ranking_summary.json"
+        )
 
     @staticmethod
     def _format_sol_range(record: RunRecord) -> str:
@@ -199,6 +272,7 @@ class DashboardView(QWidget):
             self.run_details_label.setText("Run list could not be loaded.")
             self.summary_text.clear()
             self._comparison_dashboard.set_runs(())
+            self._clear_analysis_dashboards()
             return
 
         records.sort(
@@ -248,11 +322,10 @@ class DashboardView(QWidget):
             self.status_label.setText("No analysis Runs are available.")
             self.run_details_label.setText("No Run selected.")
             self.summary_text.clear()
+            self._clear_analysis_dashboards()
             return
 
-        self.status_label.setText(
-            f"{len(records)} Run(s) available."
-        )
+        self.status_label.setText(f"{len(records)} Run(s) available.")
 
         if selected_row is None:
             selected_row = 0
@@ -270,6 +343,7 @@ class DashboardView(QWidget):
             self._selected_run_id = None
             self.run_details_label.setText("No Run selected.")
             self.summary_text.clear()
+            self._clear_analysis_dashboards()
             return
 
         item = self.run_table.item(row, 0)
@@ -278,6 +352,7 @@ class DashboardView(QWidget):
             self._selected_run_id = None
             self.run_details_label.setText("No Run selected.")
             self.summary_text.clear()
+            self._clear_analysis_dashboards()
             return
 
         run_id = item.data(Qt.ItemDataRole.UserRole)
@@ -286,6 +361,7 @@ class DashboardView(QWidget):
             self._selected_run_id = None
             self.run_details_label.setText("Invalid Run selection.")
             self.summary_text.clear()
+            self._clear_analysis_dashboards()
             return
 
         record = self._records_by_id.get(run_id)
@@ -296,10 +372,12 @@ class DashboardView(QWidget):
                 "The selected Run is no longer available."
             )
             self.summary_text.clear()
+            self._clear_analysis_dashboards()
             return
 
         self._selected_run_id = run_id
         self._display_run_details(record)
+        self._load_analysis_dashboards(record)
 
     def _display_run_details(self, record: RunRecord) -> None:
         metadata = record.metadata
@@ -353,6 +431,30 @@ class DashboardView(QWidget):
             )
 
         self.summary_text.setPlainText("\n\n".join(sections))
+
+    def _load_analysis_dashboards(self, record: RunRecord) -> None:
+        """Load only artifacts persisted inside the selected Run directory."""
+        output_dir = record.paths.output_dir
+
+        self._coverage_dashboard.load_summary_file(
+            output_dir / "coverage_summary.json"
+        )
+
+        self._quality_dashboard.load_artifacts(
+            output_dir / "quality_summary.json",
+            output_dir / self.QUALITY_REPORT_FILE,
+        )
+
+        self._synchronization_dashboard.load_artifacts(
+            output_dir / "synchronization_summary.json",
+            output_dir / self.SYNCHRONIZATION_FILE_REPORT,
+            output_dir / self.SYNCHRONIZATION_PAIR_REPORT,
+        )
+
+        self._ranking_dashboard.load_artifacts(
+            output_dir / "period_ranking_summary.json",
+            output_dir / self.RANKING_REPORT_FILE,
+        )
 
     @staticmethod
     def _read_summary_section(
