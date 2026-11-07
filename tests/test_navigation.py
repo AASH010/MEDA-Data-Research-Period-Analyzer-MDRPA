@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 from PySide6.QtWidgets import QApplication, QStackedWidget
-
+from gui.overview.overview_view import OverviewView
 from application.app_config import AppConfig
 from application.app_paths import AppPaths
 from gui.main_window.main_window import MainWindow
@@ -140,3 +140,33 @@ def test_navigation_does_not_create_duplicate_pages(main_window):
     main_window.navigate_to("home")
 
     assert main_window.page_stack.count() == initial_count
+
+def test_main_window_uses_overview_view_for_home(main_window):
+    assert isinstance(main_window.overview_view, OverviewView)
+    assert main_window.page_stack.widget(0) is main_window.overview_view
+    assert main_window.overview_view.objectName() == "page_home"
+
+
+def test_overview_quick_navigation_changes_main_window_page(
+    main_window,
+):
+    main_window.overview_view.dashboard_button.click()
+
+    assert main_window.current_page_key == "dashboard"
+
+    main_window.navigate_to("home")
+    main_window.overview_view.reports_button.click()
+
+    assert main_window.current_page_key == "reports"
+
+
+def test_overview_refreshes_when_home_is_opened(main_window):
+    calls = []
+
+    main_window.overview_view.refresh_runs = (
+        lambda: calls.append(True)
+    )
+
+    main_window.navigate_to("home")
+
+    assert calls == [True]

@@ -1,3 +1,4 @@
+
 """Main window for the MDRPA desktop application."""
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from gui.input_manager.input_manager_view import InputManagerView
 from gui.main_window.menu_bar import MainMenuBar
 from gui.main_window.navigation_sidebar import NavigationSidebar
 from gui.main_window.status_bar import MainStatusBar
+from gui.overview.overview_view import OverviewView
 from gui.reports.reports_view import ReportsView
 
 
@@ -70,6 +72,7 @@ class MainWindow(QMainWindow):
             AnalysisConfigurationView | None
         ) = None
         self._analysis_center_view: AnalysisCenterView | None = None
+        self._overview_view: OverviewView | None = None
         self._dashboard_view: DashboardView | None = None
         self._reports_view: ReportsView | None = None
 
@@ -116,6 +119,11 @@ class MainWindow(QMainWindow):
     def analysis_center_view(self) -> AnalysisCenterView | None:
         """Return the Analysis Execution controls."""
         return self._analysis_center_view
+
+    @property
+    def overview_view(self) -> OverviewView | None:
+        """Return the project-level Overview page."""
+        return self._overview_view
 
     @property
     def dashboard_view(self) -> DashboardView | None:
@@ -178,17 +186,15 @@ class MainWindow(QMainWindow):
         pipeline = controller.pipeline
         run_manager = getattr(pipeline, "run_manager", None)
 
-        if (
-            self._dashboard_view is not None
-            and isinstance(run_manager, RunManager)
-        ):
-            self._dashboard_view.set_run_manager(run_manager)
+        if isinstance(run_manager, RunManager):
+            if self._overview_view is not None:
+                self._overview_view.set_run_manager(run_manager)
 
-        if (
-            self._reports_view is not None
-            and isinstance(run_manager, RunManager)
-        ):
-            self._reports_view.set_run_manager(run_manager)
+            if self._dashboard_view is not None:
+                self._dashboard_view.set_run_manager(run_manager)
+
+            if self._reports_view is not None:
+                self._reports_view.set_run_manager(run_manager)
 
         self._connect_analysis_controller(controller)
 
@@ -225,6 +231,9 @@ class MainWindow(QMainWindow):
             self._handle_analysis_thread_finished
         )
         controller.thread_finished.connect(
+            self._refresh_overview
+        )
+        controller.thread_finished.connect(
             self._refresh_dashboard
         )
         controller.thread_finished.connect(
@@ -259,6 +268,11 @@ class MainWindow(QMainWindow):
             controller.thread_finished.connect(
                 self._analysis_center_view.set_execution_ended
             )
+
+    def _refresh_overview(self) -> None:
+        """Refresh project-level Run statistics."""
+        if self._overview_view is not None:
+            self._overview_view.refresh()
 
     def _refresh_dashboard(self) -> None:
         """Refresh persisted Run information after execution ends."""
@@ -506,7 +520,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.page_stack, 1)
 
         for page_key, page_title in self.PAGE_DEFINITIONS:
-            if page_key == "input":
+            if page_key == "home":
+                page = OverviewView(self.page_stack)
+                self._overview_view = page
+
+                # Connect Overview quick-navigation actions to MainWindow.
+                page.navigation_requested.connect(
+                    self.navigate_to
+                )
+
+            elif page_key == "input":
                 page = InputManagerView(self.page_stack)
                 self._input_manager_view = page
 
@@ -599,7 +622,9 @@ class MainWindow(QMainWindow):
         self.page_stack.setCurrentWidget(self._pages[page_key])
         self.navigation_sidebar.set_current_page(page_key)
 
-        if page_key == "dashboard":
+        if page_key == "home":
+            self._refresh_overview()
+        elif page_key == "dashboard":
             self._refresh_dashboard()
         elif page_key == "reports":
             self._refresh_reports()
