@@ -2,8 +2,10 @@
 """Sequential execution of the MEDA analysis pipeline stages.
 
 This module adapts the existing analyzers to one isolated RunPaths output
-directory. It does not manage Run lifecycle status, create background
-workers, or change scientific analyzer logic.
+directory. It supports cooperative cancellation at safe stage boundaries.
+
+It does not manage Run lifecycle status, create background workers,
+or change scientific analyzer logic.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -109,6 +112,7 @@ def _require_output_files(paths: tuple[Path, ...]) -> None:
 def _validate_execution_inputs(
     config: PipelineConfig,
     run_paths: RunPaths,
+    cancel_event: Event | None,
 ) -> tuple[Path, Path]:
     if not isinstance(config, PipelineConfig):
         raise TypeError(
@@ -118,6 +122,14 @@ def _validate_execution_inputs(
     if not isinstance(run_paths, RunPaths):
         raise TypeError(
             "run_paths must be a RunPaths instance."
+        )
+
+    if cancel_event is not None and not isinstance(
+        cancel_event,
+        Event,
+    ):
+        raise TypeError(
+            "cancel_event must be a threading.Event instance or None."
         )
 
     input_dir = config.input_dir.resolve()
@@ -168,6 +180,11 @@ def _execute_one_stage(
     stage_name: str,
     operation: Callable,
 ) -> PipelineStageResult:
+    """Execute one complete analyzer stage.
+
+    Cancellation is deliberately not checked inside this function.
+    An analyzer that has started is allowed to finish normally.
+    """
     started_at = _utc_now()
 
     try:
@@ -220,20 +237,42 @@ def _skipped_stage(stage_name: str) -> PipelineStageResult:
     )
 
 
+def _cancelled_stage(stage_name: str) -> PipelineStageResult:
+    now = _utc_now()
+
+    return PipelineStageResult(
+        stage_name=stage_name,
+        status="cancelled",
+        started_at=now,
+        finished_at=now,
+        warnings=(
+            "Stage was not executed because cancellation was requested.",
+        ),
+    )
+
+
 def execute_pipeline_stages(
     config: PipelineConfig,
     run_paths: RunPaths,
+    *,
+    cancel_event: Event | None = None,
 ) -> PipelineExecutionResult:
     """Execute analyzers sequentially for one isolated run.
 
     A stage failure immediately stops execution of all remaining stages.
-    Artifacts created by earlier completed stages are preserved.
+
+    When cancel_event is set, cancellation is applied at the next safe
+    stage boundary. An analyzer that has already started is allowed to
+    finish before the remaining stages are marked as cancelled.
+
+    Artifacts created by completed stages are preserved.
 
     Run lifecycle status is managed by AnalysisPipeline.
     """
     input_dir, output_dir = _validate_execution_inputs(
         config,
         run_paths,
+        cancel_event,
     )
 
     artifacts = {
@@ -293,6 +332,8 @@ def execute_pipeline_stages(
 
         if "failed" in statuses:
             overall_status = "failed"
+        elif "cancelled" in statuses:
+            overall_status = "cancelled"
         elif "completed_with_warnings" in statuses:
             overall_status = "completed_with_warnings"
         else:
@@ -304,11 +345,30 @@ def execute_pipeline_stages(
             stage_results=tuple(stage_results),
         )
 
+    def record_cancelled_stages(
+        first_stage_index: int,
+    ) -> None:
+        """Mark the current and all remaining stages as cancelled."""
+        for remaining_stage in _STAGE_NAMES[first_stage_index:]:
+            stage_results.append(
+                _cancelled_stage(remaining_stage)
+            )
+
     def execute_and_record(
         stage_name: str,
         operation: Callable,
     ) -> bool:
-        """Execute one stage and stop immediately if it fails."""
+        """Execute one stage, respecting failure and cancellation."""
+        stage_index = _STAGE_NAMES.index(stage_name)
+
+        # Safe checkpoint before starting the next analyzer.
+        if (
+            cancel_event is not None
+            and cancel_event.is_set()
+        ):
+            record_cancelled_stages(stage_index)
+            return False
+
         result = _execute_one_stage(
             stage_name,
             operation,
@@ -316,8 +376,11 @@ def execute_pipeline_stages(
 
         stage_results.append(result)
 
+        # A real stage failure takes precedence over a simultaneous
+        # cancellation request. Remaining stages are skipped because
+        # their required inputs may be incomplete.
         if result.status == "failed":
-            failed_index = len(stage_results)
+            failed_index = stage_index + 1
 
             for remaining_stage in _STAGE_NAMES[failed_index:]:
                 stage_results.append(
