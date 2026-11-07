@@ -448,6 +448,8 @@ def build_metadata_index(metadata: dict) -> dict:
         "by_path": by_path,
         "by_stem": by_stem,
     }
+
+
 def find_metadata_record(
     inventory_row: dict,
     index: dict,
@@ -1361,6 +1363,8 @@ def analyze_csv(
                 str(error),
             )
         ]
+
+
 # --------------------------------------------------
 # Full inventory analysis
 # --------------------------------------------------
@@ -1477,7 +1481,46 @@ def write_report(
 # Summary
 # --------------------------------------------------
 
-def build_summary(rows: list[dict]) -> dict:
+def build_summary(
+    rows: list[dict],
+    start_sol: int | None = None,
+    end_sol: int | None = None,
+) -> dict:
+    """
+    Build a quality summary for the full dataset or an inclusive SOL range.
+
+    With no bounds, all report rows are summarized (legacy behavior).
+    If one bound is omitted, only the supplied bound is applied.
+    """
+    if start_sol is not None:
+        if isinstance(start_sol, bool) or not isinstance(start_sol, int):
+            raise TypeError("start_sol must be an integer or None.")
+        if start_sol < 0:
+            raise ValueError("start_sol must be non-negative.")
+
+    if end_sol is not None:
+        if isinstance(end_sol, bool) or not isinstance(end_sol, int):
+            raise TypeError("end_sol must be an integer or None.")
+        if end_sol < 0:
+            raise ValueError("end_sol must be non-negative.")
+
+    if (
+        start_sol is not None
+        and end_sol is not None
+        and start_sol > end_sol
+    ):
+        raise ValueError("start_sol must be less than or equal to end_sol.")
+
+    if start_sol is not None or end_sol is not None:
+        rows = [
+            row
+            for row in rows
+            if isinstance(row.get("sol_number"), int)
+            and not isinstance(row.get("sol_number"), bool)
+            and (start_sol is None or row["sol_number"] >= start_sol)
+            and (end_sol is None or row["sol_number"] <= end_sol)
+        ]
+
     analysed = [
         row
         for row in rows
@@ -1529,6 +1572,8 @@ def build_summary(rows: list[dict]) -> dict:
 
     return {
         "analyzer": "MEDA Quality Analyzer",
+        "start_sol": start_sol,
+        "end_sol": end_sol,
 
         "generated_at_utc": datetime.now(
             timezone.utc
