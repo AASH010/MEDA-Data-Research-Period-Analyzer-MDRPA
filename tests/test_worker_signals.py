@@ -141,6 +141,19 @@ def test_cancelled_signal_emits_message():
     ]
 
 
+def test_execution_ended_signal_emits_without_arguments():
+    signals = WorkerSignals()
+    received = []
+
+    signals.execution_ended.connect(
+        lambda: received.append(True)
+    )
+
+    signals.execution_ended.emit()
+
+    assert received == [True]
+
+
 def test_all_worker_signals_can_be_used_on_independent_instances():
     first = WorkerSignals()
     second = WorkerSignals()

@@ -42,12 +42,17 @@ class WorkerSignals(QObject):
             Payload: error message (str).
 
         finished:
-            Emitted once worker execution has ended.
+            Emitted when execution returns a PipelineRunResult.
             Payload: PipelineRunResult (object).
 
         cancelled:
             Emitted when cooperative cancellation has completed.
             Payload: cancellation message (str).
+
+        execution_ended:
+            Emitted exactly once after an actual run() invocation
+            finishes, including when an unexpected exception occurs.
+            No payload.
     """
 
     started = Signal()
@@ -62,3 +67,5 @@ class WorkerSignals(QObject):
 
     finished = Signal(object)
     cancelled = Signal(str)
+
+    execution_ended = Signal()

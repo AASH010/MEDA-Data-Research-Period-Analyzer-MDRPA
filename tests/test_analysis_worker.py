@@ -1,3 +1,4 @@
+
 """Tests for the MEDA background analysis worker."""
 
 from __future__ import annotations
@@ -111,13 +112,14 @@ def test_worker_rejects_invalid_run_id(tmp_path, run_id):
         )
 
 
-def test_worker_emits_started_and_finished(tmp_path):
+def test_worker_emits_started_finished_and_execution_ended(tmp_path):
     pipeline = make_pipeline()
     expected_result = make_result()
 
     received = {
         "started": 0,
         "finished": [],
+        "execution_ended": 0,
     }
 
     def fake_execute(config, **kwargs):
@@ -131,18 +133,27 @@ def test_worker_emits_started_and_finished(tmp_path):
         run_id="worker-test-run",
     )
 
-    def on_started():
-        received["started"] += 1
-
-    worker.signals.started.connect(on_started)
+    worker.signals.started.connect(
+        lambda: received.__setitem__(
+            "started",
+            received["started"] + 1,
+        )
+    )
     worker.signals.finished.connect(
         received["finished"].append
+    )
+    worker.signals.execution_ended.connect(
+        lambda: received.__setitem__(
+            "execution_ended",
+            received["execution_ended"] + 1,
+        )
     )
 
     worker.run()
 
     assert received["started"] == 1
     assert received["finished"] == [expected_result]
+    assert received["execution_ended"] == 1
 
 
 def test_worker_passes_pipeline_event_callbacks(tmp_path):
@@ -314,7 +325,9 @@ def test_worker_passes_cancellation_event(tmp_path):
     ]
 
 
-def test_worker_reports_unexpected_exception(tmp_path):
+def test_worker_reports_unexpected_exception_and_ends_execution(
+    tmp_path,
+):
     pipeline = make_pipeline()
 
     def fake_execute(config, **kwargs):
@@ -329,12 +342,16 @@ def test_worker_reports_unexpected_exception(tmp_path):
 
     errors = []
     finished = []
+    execution_ended = []
 
     worker.signals.error_occurred.connect(
         errors.append
     )
     worker.signals.finished.connect(
         finished.append
+    )
+    worker.signals.execution_ended.connect(
+        lambda: execution_ended.append(True)
     )
 
     worker.run()
@@ -344,6 +361,7 @@ def test_worker_reports_unexpected_exception(tmp_path):
     ]
 
     assert finished == []
+    assert execution_ended == [True]
 
 
 def test_worker_can_only_run_once(tmp_path):
@@ -362,9 +380,13 @@ def test_worker_can_only_run_once(tmp_path):
     )
 
     errors = []
+    execution_ended = []
 
     worker.signals.error_occurred.connect(
         errors.append
+    )
+    worker.signals.execution_ended.connect(
+        lambda: execution_ended.append(True)
     )
 
     worker.run()
@@ -375,6 +397,10 @@ def test_worker_can_only_run_once(tmp_path):
     assert errors == [
         "AnalysisWorker can only be executed once."
     ]
+
+    # The terminal signal belongs to the actual execution,
+    # not to a rejected second invocation.
+    assert execution_ended == [True]
 
 
 def test_workers_have_independent_signals(tmp_path):

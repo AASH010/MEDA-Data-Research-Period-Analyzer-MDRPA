@@ -1,3 +1,4 @@
+
 """Background worker for executing one MEDA analysis pipeline.
 
 The worker is a QObject intended to be moved to a QThread owned by
@@ -130,6 +131,9 @@ class AnalysisWorker(QObject):
 
         The worker can only run once. Unexpected exceptions are
         reported through error_occurred.
+
+        execution_ended is emitted in the finally block so the
+        controller can reliably finish the owning QThread.
         """
         with self._execution_lock:
             if self._has_started:
@@ -140,9 +144,9 @@ class AnalysisWorker(QObject):
 
             self._has_started = True
 
-        self.signals.started.emit()
-
         try:
+            self.signals.started.emit()
+
             result = self.pipeline.execute(
                 self.config,
                 run_id=self.run_id,
@@ -172,3 +176,6 @@ class AnalysisWorker(QObject):
             self.signals.error_occurred.emit(
                 f"{type(exc).__name__}: {exc}"
             )
+
+        finally:
+            self.signals.execution_ended.emit()
