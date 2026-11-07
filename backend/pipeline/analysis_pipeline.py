@@ -2,8 +2,8 @@
 """High-level orchestration for one MEDA analysis run.
 
 This module coordinates configuration validation, Run lifecycle
-management, sequential pipeline execution, and persistence of execution
-failure details.
+management, sequential pipeline execution, cooperative cancellation,
+and persistence of execution details.
 
 It does not implement analyzer logic, background workers, GUI behavior,
 or scientific calculations.
@@ -12,6 +12,7 @@ or scientific calculations.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Event
 from typing import Any, Mapping
 
 from backend.pipeline.pipeline_executor import (
@@ -60,6 +61,11 @@ class PipelineRunResult:
             and self.execution.successful
             and self.error is None
         )
+
+    @property
+    def cancelled(self) -> bool:
+        """Whether the Run ended through cooperative cancellation."""
+        return self.record.status is RunStatus.CANCELLED
 
 
 class AnalysisPipeline:
@@ -165,16 +171,15 @@ class AnalysisPipeline:
 
         return "Pipeline execution failed."
 
-    def _persist_failure_details(
+    def _persist_execution_summary(
         self,
         record: RunRecord,
         execution: PipelineExecutionResult | None,
         error: str | None = None,
     ) -> None:
-        """Attach execution details before persisting FAILED status."""
-        metadata = record.metadata
+        """Persist execution details in the run metadata settings."""
+        updated_settings = dict(record.metadata.settings)
 
-        updated_settings = dict(metadata.settings)
         updated_settings[self.EXECUTION_SUMMARY_KEY] = (
             self._build_execution_summary(
                 execution,
@@ -182,8 +187,22 @@ class AnalysisPipeline:
             )
         )
 
-        metadata.settings = updated_settings
-        metadata.failure_reason = self._build_failure_reason(
+        record.metadata.settings = updated_settings
+
+    def _persist_failure_details(
+        self,
+        record: RunRecord,
+        execution: PipelineExecutionResult | None,
+        error: str | None = None,
+    ) -> None:
+        """Attach execution details before persisting FAILED status."""
+        self._persist_execution_summary(
+            record,
+            execution,
+            error,
+        )
+
+        record.metadata.failure_reason = self._build_failure_reason(
             execution,
             error,
         )
@@ -196,25 +215,41 @@ class AnalysisPipeline:
         input_source: str | None = None,
         source_info: Mapping[str, Any] | None = None,
         application_version: str | None = None,
+        cancel_event: Event | None = None,
     ) -> PipelineRunResult:
         """Validate, create, and execute one analysis Run.
 
-        Configuration validation occurs before Run creation.
+        Configuration and cancellation-token validation occur before
+        Run creation.
 
-        A successfully created Run transitions through:
+        A successful Run transitions through:
             PENDING -> RUNNING -> COMPLETED
 
-        If a pipeline stage fails, the Run transitions to FAILED and
-        its execution details are persisted in metadata.json.
+        A cooperatively cancelled Run transitions through:
+            PENDING -> RUNNING -> CANCELLED
 
-        If an unexpected exception occurs during stage execution,
-        the Run is marked FAILED and the exception is returned as
-        a structured error string. The error is also persisted.
+        A failed Run transitions through:
+            PENDING -> RUNNING -> FAILED
+
+        Cancellation is cooperative. An analyzer that has already
+        started is allowed to finish before the executor stops the
+        remaining stages.
+
+        Execution details are persisted in metadata.json for cancelled
+        and failed executions.
 
         A generated Run ID requires a configured SOL range, following
         the existing RunManager contract. A caller may provide run_id
         when no SOL range is configured.
         """
+        if cancel_event is not None and not isinstance(
+            cancel_event,
+            Event,
+        ):
+            raise TypeError(
+                "cancel_event must be a threading.Event instance or None."
+            )
+
         validated_config = validate_pipeline_config(config)
 
         record = self.run_manager.create_run(
@@ -232,10 +267,20 @@ class AnalysisPipeline:
         execution: PipelineExecutionResult | None = None
 
         try:
-            execution = execute_pipeline_stages(
-                validated_config,
-                record.paths,
-            )
+            # Preserve backward compatibility with existing callers,
+            # tests, and integrations that use the original two-argument
+            # executor call.
+            if cancel_event is None:
+                execution = execute_pipeline_stages(
+                    validated_config,
+                    record.paths,
+                )
+            else:
+                execution = execute_pipeline_stages(
+                    validated_config,
+                    record.paths,
+                    cancel_event=cancel_event,
+                )
 
             if not isinstance(execution, PipelineExecutionResult):
                 raise TypeError(
@@ -247,6 +292,21 @@ class AnalysisPipeline:
                 raise ValueError(
                     "Pipeline execution run_id does not match "
                     "the active Run."
+                )
+
+            if execution.status == "cancelled":
+                self._persist_execution_summary(
+                    record,
+                    execution,
+                )
+
+                record = self.run_manager.cancel_run(
+                    record.run_id
+                )
+
+                return PipelineRunResult(
+                    record=record,
+                    execution=execution,
                 )
 
             if execution.successful:
