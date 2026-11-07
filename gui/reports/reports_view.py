@@ -5,16 +5,13 @@ from __future__ import annotations
 
 import csv
 import json
-import shutil
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QComboBox,
-    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QTableWidget,
@@ -25,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_registry import RunRecord
+from gui.reports.export_view import ExportView
 
 
 __all__ = ["ReportsView"]
@@ -504,7 +502,7 @@ class ReportsView(QWidget):
         self,
         destination: str | Path,
     ) -> Path:
-        """Copy the selected report to a user-chosen destination."""
+        """Export the selected report through the dedicated ExportView."""
         source = self._selected_report_path
 
         if source is None:
@@ -512,58 +510,48 @@ class ReportsView(QWidget):
 
         record = self._records_by_id.get(self.selected_run_id or "")
 
-        if record is None or not self._is_report_available(
-            source,
-            record.paths.output_dir,
-        ):
+        if record is None:
             raise FileNotFoundError(
-                "The selected report is no longer available."
+                "The selected Run is no longer available."
             )
 
-        target = Path(destination).expanduser().resolve()
+        dialog = ExportView(
+            source_path=source,
+            output_dir=record.paths.output_dir,
+            run_id=record.run_id,
+            parent=self,
+        )
 
-        if target == source.resolve():
-            raise ValueError(
-                "The export destination must differ from the source report."
-            )
-
-        if target.exists() and target.is_dir():
-            raise IsADirectoryError(
-                f"Export destination is a directory: {target}"
-            )
-
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        return target
+        return dialog.export_to(destination)
 
     def _choose_export_destination(self) -> None:
+        """Open the dedicated export dialog for the selected report."""
         source = self._selected_report_path
 
         if source is None:
             return
 
-        destination, _selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Export Report",
-            source.name,
-            "All Files (*)",
-        )
+        record = self._records_by_id.get(self.selected_run_id or "")
 
-        if not destination:
+        if record is None:
             return
 
-        try:
-            exported_path = self.export_selected_to(destination)
-        except (OSError, RuntimeError, ValueError) as exc:
-            QMessageBox.warning(
-                self,
-                "Report Export Failed",
-                f"Unable to export report:\n{type(exc).__name__}: {exc}",
+        if not self._is_report_available(
+            source,
+            record.paths.output_dir,
+        ):
+            self._selected_report_path = None
+            self.export_button.setEnabled(False)
+            self.preview_label.setText("Report unavailable")
+            self.preview_text.setPlainText(
+                "The selected report is no longer available."
             )
             return
 
-        QMessageBox.information(
-            self,
-            "Report Exported",
-            f"Report exported successfully:\n{exported_path}",
+        dialog = ExportView(
+            source_path=source,
+            output_dir=record.paths.output_dir,
+            run_id=record.run_id,
+            parent=self,
         )
+        dialog.exec()

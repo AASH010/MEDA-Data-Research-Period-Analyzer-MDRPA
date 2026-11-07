@@ -482,3 +482,56 @@ def test_reports_view_handles_missing_artifact_preview(
 
     assert reports_view.selected_report_path is None
     assert not reports_view.export_button.isEnabled()
+
+
+def test_reports_view_opens_export_view_for_selected_run(
+    reports_view,
+    run_manager,
+    monkeypatch,
+):
+    record = create_completed_run(
+        run_manager,
+        "reports-export-dialog-run",
+    )
+
+    source = write_report(
+        record,
+        "coverage_summary.json",
+        '{"coverage": 95}',
+    )
+
+    reports_view.set_run_manager(run_manager)
+    select_run(reports_view, record.run_id)
+    select_report(reports_view, "coverage_summary.json")
+
+    captured = {}
+
+    class FakeExportView:
+        def __init__(
+            self,
+            *,
+            source_path,
+            output_dir,
+            run_id,
+            parent=None,
+        ):
+            captured["source_path"] = source_path
+            captured["output_dir"] = output_dir
+            captured["run_id"] = run_id
+            captured["parent"] = parent
+
+        def exec(self):
+            captured["opened"] = True
+
+    monkeypatch.setattr(
+        "gui.reports.reports_view.ExportView",
+        FakeExportView,
+    )
+
+    reports_view.export_button.click()
+
+    assert captured["opened"] is True
+    assert captured["source_path"] == source
+    assert captured["output_dir"] == record.paths.output_dir
+    assert captured["run_id"] == record.run_id
+    assert captured["parent"] is reports_view
