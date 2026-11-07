@@ -1,4 +1,3 @@
-
 """Sequential execution of the MEDA analysis pipeline stages.
 
 This module adapts existing analyzers to one isolated RunPaths output
@@ -368,6 +367,10 @@ def execute_pipeline_stages(
             output_dir,
             "quality_summary.json",
         ),
+        "quality_range_summary": _output_path(
+            output_dir,
+            "quality_range_summary.json",
+        ),
         "sync_files": _output_path(
             output_dir,
             "synchronization_file_report.csv",
@@ -380,6 +383,10 @@ def execute_pipeline_stages(
             output_dir,
             "synchronization_summary.json",
         ),
+        "sync_range_summary": _output_path(
+            output_dir,
+            "synchronization_range_summary.json",
+        ),
         "ranking": _output_path(
             output_dir,
             "period_ranking.csv",
@@ -387,6 +394,14 @@ def execute_pipeline_stages(
         "ranking_summary": _output_path(
             output_dir,
             "period_ranking_summary.json",
+        ),
+        "ranking_full": _output_path(
+            output_dir,
+            "period_ranking_full.csv",
+        ),
+        "ranking_full_summary": _output_path(
+            output_dir,
+            "period_ranking_full_summary.json",
         ),
     }
 
@@ -491,6 +506,11 @@ def execute_pipeline_stages(
     quality_reports: list[dict] = []
     sync_file_reports: list[dict] = []
     sync_pair_reports: list[dict] = []
+
+    observed_start: int | None = None
+    observed_end: int | None = None
+    selected_start: int | None = None
+    selected_end: int | None = None
 
     # -----------------------------------------------------
     # 1. File Discovery
@@ -619,6 +639,8 @@ def execute_pipeline_stages(
 
     def run_coverage_analyzer():
         nonlocal coverage_reports
+        nonlocal observed_start, observed_end
+        nonlocal selected_start, selected_end
 
         coverage_reports = coverage_analyzer.analyze_coverage(
             input_dir,
@@ -647,8 +669,7 @@ def execute_pipeline_stages(
                 "number in the file inventory."
             )
 
-        # The full-dataset summary always uses the observed data range,
-        # independently of the user's selected range.
+        # Full dataset boundaries are independent of user selection.
         observed_start = min(observed_sols)
         observed_end = max(observed_sols)
 
@@ -672,7 +693,7 @@ def execute_pipeline_stages(
             artifacts["coverage_summary"],
         )
 
-        # Resolve an omitted bound against the observed dataset range.
+        # Resolve omitted bounds against the observed dataset range.
         requested_start = (
             config.start_sol
             if config.start_sol is not None
@@ -684,7 +705,7 @@ def execute_pipeline_stages(
             else observed_end
         )
 
-        # Restrict the effective selected range to the observed range.
+        # Restrict the effective selected range to observed SOLs.
         selected_start = max(
             requested_start,
             observed_start,
@@ -758,32 +779,60 @@ def execute_pipeline_stages(
     def run_quality_analyzer():
         nonlocal quality_reports
 
+        if (
+            observed_start is None
+            or observed_end is None
+            or selected_start is None
+            or selected_end is None
+        ):
+            raise RuntimeError(
+                "SOL ranges must be resolved before Quality Analyzer."
+            )
+
         quality_reports = quality_analyzer.run_analysis(
             input_dir,
             inventory_records,
             metadata_inventory,
         )
 
+        # Detailed quality report remains unfiltered.
         quality_analyzer.write_report(
             artifacts["quality"],
             quality_reports,
         )
 
-        quality_summary = quality_analyzer.build_summary(
-            quality_reports
+        full_quality_summary = quality_analyzer.build_summary(
+            quality_reports,
+            start_sol=observed_start,
+            end_sol=observed_end,
         )
 
         quality_analyzer.save_summary(
             artifacts["quality_summary"],
-            quality_summary,
+            full_quality_summary,
+        )
+
+        selected_quality_summary = quality_analyzer.build_summary(
+            quality_reports,
+            start_sol=selected_start,
+            end_sol=selected_end,
+        )
+
+        quality_analyzer.save_summary(
+            artifacts["quality_range_summary"],
+            selected_quality_summary,
         )
 
         return (
             (
                 artifacts["quality"],
                 artifacts["quality_summary"],
+                artifacts["quality_range_summary"],
             ),
-            quality_summary,
+            {
+                "full_dataset": full_quality_summary,
+                "selected_range": selected_quality_summary,
+            },
             (),
         )
 
@@ -800,6 +849,16 @@ def execute_pipeline_stages(
     def run_synchronization_analyzer():
         nonlocal sync_file_reports, sync_pair_reports
 
+        if (
+            observed_start is None
+            or observed_end is None
+            or selected_start is None
+            or selected_end is None
+        ):
+            raise RuntimeError(
+                "SOL ranges must be resolved before Synchronization Analyzer."
+            )
+
         metadata_records = metadata_inventory["records"]
 
         (
@@ -812,6 +871,7 @@ def execute_pipeline_stages(
             tolerance=config.tolerance,
         )
 
+        # Detailed synchronization reports remain unfiltered.
         synchronization_analyzer.write_csv(
             artifacts["sync_files"],
             sync_file_reports,
@@ -824,15 +884,30 @@ def execute_pipeline_stages(
             synchronization_analyzer.PAIR_REPORT_COLUMNS,
         )
 
-        sync_summary = synchronization_analyzer.build_summary(
+        full_sync_summary = synchronization_analyzer.build_summary(
             sync_file_reports,
             sync_pair_reports,
             config.tolerance,
+            start_sol=observed_start,
+            end_sol=observed_end,
         )
 
         synchronization_analyzer.save_summary(
             artifacts["sync_summary"],
-            sync_summary,
+            full_sync_summary,
+        )
+
+        selected_sync_summary = synchronization_analyzer.build_summary(
+            sync_file_reports,
+            sync_pair_reports,
+            config.tolerance,
+            start_sol=selected_start,
+            end_sol=selected_end,
+        )
+
+        synchronization_analyzer.save_summary(
+            artifacts["sync_range_summary"],
+            selected_sync_summary,
         )
 
         return (
@@ -840,8 +915,12 @@ def execute_pipeline_stages(
                 artifacts["sync_files"],
                 artifacts["sync_pairs"],
                 artifacts["sync_summary"],
+                artifacts["sync_range_summary"],
             ),
-            sync_summary,
+            {
+                "full_dataset": full_sync_summary,
+                "selected_range": selected_sync_summary,
+            },
             (),
         )
 
@@ -856,36 +935,72 @@ def execute_pipeline_stages(
     # -----------------------------------------------------
 
     def run_period_ranker():
-        ranker_args = SimpleNamespace(
-            inventory=str(artifacts["inventory"]),
-            coverage=str(artifacts["coverage"]),
-            quality=str(artifacts["quality"]),
-            sync_files=str(artifacts["sync_files"]),
-            sync_pairs=str(artifacts["sync_pairs"]),
-            output=str(artifacts["ranking"]),
-            summary=str(artifacts["ranking_summary"]),
-            start_sol=config.start_sol,
-            end_sol=config.end_sol,
-            window_size=config.window_size,
-            min_sol_fraction=config.min_sol_fraction,
-            min_metrics=config.min_metrics,
-            required_products=list(config.required_products),
-            weight_files=config.weight_files,
-            weight_integrity=config.weight_integrity,
-            weight_quality=config.weight_quality,
-            weight_sync=config.weight_sync,
-            integrity_timestamps=config.integrity_timestamps,
-            integrity_values=config.integrity_values,
+        if (
+            observed_start is None
+            or observed_end is None
+            or selected_start is None
+            or selected_end is None
+        ):
+            raise RuntimeError(
+                "SOL ranges must be resolved before Period Ranker."
+            )
+
+        common_ranker_args = {
+            "inventory": str(artifacts["inventory"]),
+            "coverage": str(artifacts["coverage"]),
+            "quality": str(artifacts["quality"]),
+            "sync_files": str(artifacts["sync_files"]),
+            "sync_pairs": str(artifacts["sync_pairs"]),
+            "window_size": config.window_size,
+            "min_sol_fraction": config.min_sol_fraction,
+            "min_metrics": config.min_metrics,
+            "required_products": list(config.required_products),
+            "weight_files": config.weight_files,
+            "weight_integrity": config.weight_integrity,
+            "weight_quality": config.weight_quality,
+            "weight_sync": config.weight_sync,
+            "integrity_timestamps": config.integrity_timestamps,
+            "integrity_values": config.integrity_values,
+        }
+
+        # Run the full-dataset ranking independently of the selected range.
+        full_ranker_args = SimpleNamespace(
+            **common_ranker_args,
+            output=str(artifacts["ranking_full"]),
+            summary=str(artifacts["ranking_full_summary"]),
+            start_sol=observed_start,
+            end_sol=observed_end,
         )
 
-        ranking_summary = period_ranker.run(ranker_args)
+        full_ranking_summary = period_ranker.run(
+            full_ranker_args
+        )
+
+        # Preserve the existing ranking artifact names and their
+        # selected-range behavior for backward compatibility.
+        selected_ranker_args = SimpleNamespace(
+            **common_ranker_args,
+            output=str(artifacts["ranking"]),
+            summary=str(artifacts["ranking_summary"]),
+            start_sol=selected_start,
+            end_sol=selected_end,
+        )
+
+        selected_ranking_summary = period_ranker.run(
+            selected_ranker_args
+        )
 
         return (
             (
+                artifacts["ranking_full"],
+                artifacts["ranking_full_summary"],
                 artifacts["ranking"],
                 artifacts["ranking_summary"],
             ),
-            ranking_summary,
+            {
+                "full_dataset": full_ranking_summary,
+                "selected_range": selected_ranking_summary,
+            },
             (),
         )
 
