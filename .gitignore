@@ -31,8 +31,14 @@ input/*
 # Temporary files
 *.tmp
 *.bak
+
 # Test input and output directories
 /input_test/
 /output_test/
+
 # Local testing data - do not upload to GitHub
 /z__________/
+
+# Ignore everything inside performance except the test script.
+/performance/*
+!/performance/performance_test.py

@@ -1530,3 +1530,101 @@ def test_pipeline_package_exports_public_api():
     assert PipelineStageResult is not None
     assert callable(execute_pipeline_stages)
     assert callable(validate_pipeline_config)
+
+
+def test_pipeline_executor_handles_output_write_failure(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-output-write-failure",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(input_dir=input_dir)
+    _patch_successful_analyzers(monkeypatch)
+
+    def fail_inventory_write(records, path):
+        raise PermissionError("simulated output write failure")
+
+    monkeypatch.setattr(
+        pipeline_executor.file_discovery,
+        "write_inventory",
+        fail_inventory_write,
+    )
+
+    result = execute_pipeline_stages(config, run_paths)
+
+    assert result.status == "failed"
+    assert result.successful is False
+
+    discovery_stage = result.stage_results[0]
+
+    assert discovery_stage.stage_name == "file_discovery"
+    assert discovery_stage.status == "failed"
+    assert discovery_stage.errors
+    assert "PermissionError" in discovery_stage.errors[0]
+    assert "simulated output write failure" in discovery_stage.errors[0]
+
+    assert [
+        stage.status for stage in result.stage_results[1:]
+    ] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+    ]
+
+
+def test_pipeline_executor_fails_when_expected_artifact_is_missing(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create(
+        "executor-missing-expected-artifact",
+        tmp_path / "runs",
+    )
+
+    config = PipelineConfig(input_dir=input_dir)
+    _patch_successful_analyzers(monkeypatch)
+
+    # Simulate a writer that returns successfully but creates no file.
+    monkeypatch.setattr(
+        pipeline_executor.file_discovery,
+        "write_inventory",
+        lambda records, path: None,
+    )
+
+    result = execute_pipeline_stages(config, run_paths)
+
+    assert result.status == "failed"
+    assert result.successful is False
+
+    discovery_stage = result.stage_results[0]
+
+    assert discovery_stage.stage_name == "file_discovery"
+    assert discovery_stage.status == "failed"
+    assert discovery_stage.errors
+    assert "FileNotFoundError" in discovery_stage.errors[0]
+    assert "file_inventory.csv" in discovery_stage.errors[0]
+
+    assert not (
+        run_paths.output_dir / "file_inventory.csv"
+    ).exists()
+
+    assert [
+        stage.status for stage in result.stage_results[1:]
+    ] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+    ]
