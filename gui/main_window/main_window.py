@@ -630,10 +630,13 @@ class MainWindow(QMainWindow):
         elif page_key == "reports":
             self._refresh_reports()
 
-        page_titles = dict(self.PAGE_DEFINITIONS)
-        self.application_status_bar.showMessage(
+        controller = self._analysis_controller
+
+        if controller is None or not controller.is_active:
+            page_titles = dict(self.PAGE_DEFINITIONS)
+            self.application_status_bar.showMessage(
             f"Ready — {page_titles[page_key]}"
-        )
+            )
 
     # ------------------------------------------------------------------
     # Window settings

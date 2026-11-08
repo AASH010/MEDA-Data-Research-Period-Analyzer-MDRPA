@@ -514,3 +514,76 @@ def test_changing_input_invalidates_execution_readiness(
     assert configuration_view.input_directory is None
     assert configuration_view.validated_config is None
     assert center.start_button.isEnabled() is False
+
+def test_navigation_does_not_override_analysis_status_while_running(
+    main_window,
+    tmp_path,
+):
+    execution_started = Event()
+    release_execution = Event()
+
+    def fake_execute(config, **kwargs):
+        execution_started.set()
+        release_execution.wait(timeout=5)
+        return make_result()
+
+    main_window.analysis_controller.pipeline.execute = fake_execute
+
+    prepare_valid_configuration(
+        main_window,
+        tmp_path,
+    )
+
+    center = main_window.analysis_center_view
+    center.start_button.click()
+
+    assert execution_started.wait(timeout=2)
+
+    status_bar = main_window.application_status_bar
+    status_bar.showMessage("Running: Coverage Analyzer")
+
+    try:
+        main_window.navigate_to("dashboard")
+
+        assert main_window.current_page_key == "dashboard"
+        assert (
+            status_bar.currentMessage()
+            == "Running: Coverage Analyzer"
+        )
+    finally:
+        release_execution.set()
+
+    wait_for_thread_finished(
+        main_window.analysis_controller,
+        QApplication.instance(),
+    )
+
+def test_controller_start_failure_restores_execution_controls(
+    main_window,
+    tmp_path,
+    monkeypatch,
+):
+    prepare_valid_configuration(main_window, tmp_path)
+
+    center = main_window.analysis_center_view
+    controller = main_window.analysis_controller
+
+    def fail_to_start(_config):
+        raise RuntimeError("Worker initialization failed")
+
+    monkeypatch.setattr(controller, "start", fail_to_start)
+
+    center.start_button.click()
+
+    assert center.execution_active is False
+    assert center.start_button.isEnabled() is True
+    assert center.cancel_button.isEnabled() is False
+
+    assert "unable to start analysis" in (
+        center.status_label.text().lower()
+    )
+    assert "worker initialization failed" in (
+        center.status_label.text().lower()
+    )
+
+    assert controller.is_active is False

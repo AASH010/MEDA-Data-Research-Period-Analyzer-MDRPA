@@ -362,3 +362,69 @@ def test_main_window_hides_input_directory_after_clear(
     main_window.input_manager_view.clear_selection()
 
     assert main_window.selected_input_dir is None
+
+
+def test_validate_dataset_handles_discovery_os_error(
+    input_view,
+    tmp_path,
+    monkeypatch,
+):
+    dataset = create_valid_dataset(tmp_path / "dataset")
+    input_view.set_input_directory(dataset)
+
+    monkeypatch.setattr(
+        "gui.input_manager.input_manager_view.discover_files",
+        lambda _directory: (_ for _ in ()).throw(
+            PermissionError("Access denied")
+        ),
+    )
+
+    ready_events = []
+    input_view.input_ready.connect(ready_events.append)
+
+    assert input_view.validate_dataset() is False
+    assert input_view.is_validated is False
+    assert input_view.discovered_records == ()
+    assert ready_events == []
+
+    details = input_view.validation_view.details_label.text()
+    assert "Dataset discovery failed" in details
+    assert "Access denied" in details
+
+
+def test_input_ready_is_emitted_only_after_successful_validation(
+    input_view,
+    tmp_path,
+):
+    dataset = create_valid_dataset(tmp_path / "dataset")
+    input_view.set_input_directory(dataset)
+
+    ready_events = []
+    input_view.input_ready.connect(ready_events.append)
+
+    assert input_view.validate_dataset() is True
+    assert ready_events == [dataset.resolve()]
+
+
+def test_browse_cancel_preserves_existing_selection(
+    input_view,
+    tmp_path,
+    monkeypatch,
+):
+    dataset = create_valid_dataset(tmp_path / "dataset")
+    input_view.set_input_directory(dataset)
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getExistingDirectory",
+        lambda *args, **kwargs: "",
+    )
+
+    input_view.file_import_view.choose_directory()
+
+    assert input_view.selected_input_dir == dataset.resolve()
+    assert input_view.file_import_view.selected_directory == (
+        dataset.resolve()
+    )
+    assert input_view.is_validated is False
+

@@ -535,3 +535,94 @@ def test_reports_view_opens_export_view_for_selected_run(
     assert captured["output_dir"] == record.paths.output_dir
     assert captured["run_id"] == record.run_id
     assert captured["parent"] is reports_view
+
+
+def test_reports_view_handles_corrupted_json_preview(
+    reports_view,
+    run_manager,
+):
+    record = create_completed_run(
+        run_manager,
+        "reports-corrupted-json-run",
+    )
+
+    write_report(
+        record,
+        "coverage_summary.json",
+        '{"coverage": invalid-json}',
+    )
+
+    reports_view.set_run_manager(run_manager)
+    select_run(reports_view, record.run_id)
+    select_report(reports_view, "coverage_summary.json")
+
+    preview = get_preview_widget(reports_view).toPlainText()
+
+    assert "unable to preview report" in preview.lower()
+    assert reports_view.export_button.isEnabled()
+
+
+def test_reports_view_limits_large_report_preview(
+    reports_view,
+    run_manager,
+):
+    record = create_completed_run(
+        run_manager,
+        "reports-large-preview-run",
+    )
+
+    large_content = "x" * (
+        reports_view.PREVIEW_MAX_BYTES + 1
+    )
+
+    write_report(
+        record,
+        "coverage_summary.json",
+        large_content,
+    )
+
+    reports_view.set_run_manager(run_manager)
+    select_run(reports_view, record.run_id)
+    select_report(reports_view, "coverage_summary.json")
+
+    preview = get_preview_widget(reports_view).toPlainText()
+
+    assert "preview omitted" in preview.lower()
+    assert reports_view.export_button.isEnabled()
+
+
+def test_reports_view_rejects_report_removed_after_listing(
+    reports_view,
+    run_manager,
+):
+    record = create_completed_run(
+        run_manager,
+        "reports-removed-after-listing-run",
+    )
+
+    report_path = write_report(
+        record,
+        "coverage_summary.json",
+        '{"coverage": 95}',
+    )
+
+    reports_view.set_run_manager(run_manager)
+    select_run(reports_view, record.run_id)
+
+    assert report_status(
+        reports_view,
+        "coverage_summary.json",
+    ) == "Available"
+
+    report_path.unlink()
+
+    select_report(
+        reports_view,
+        "coverage_summary.json",
+    )
+
+    preview = get_preview_widget(reports_view).toPlainText()
+
+    assert "no longer available" in preview.lower()
+    assert reports_view.selected_report_path is None
+    assert not reports_view.export_button.isEnabled()

@@ -197,3 +197,15 @@ def test_export_view_rejects_invalid_run_id(
             output_dir=completed_run.paths.output_dir,
             run_id="",
         )
+def test_export_view_rejects_existing_destination(
+    export_view,
+    tmp_path,
+):
+    destination = tmp_path / "existing-report.json"
+    original_content = "keep this content"
+    destination.write_text(original_content, encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        export_view.export_to(destination)
+
+    assert destination.read_text(encoding="utf-8") == original_content

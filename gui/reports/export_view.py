@@ -198,7 +198,10 @@ class ExportView(QDialog):
             raise IsADirectoryError(
                 f"Export destination is a directory: {target}"
             )
-
+        if target.exists():
+            raise FileExistsError(
+                f"An export file already exists at: {target}"
+                )    
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 

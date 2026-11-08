@@ -382,7 +382,38 @@ def test_dashboard_refreshes_after_controller_thread_finished(
         "dashboard-thread-finished-run"
     )
 
+def test_all_run_views_refresh_when_controller_thread_finishes(
+    main_window,
+):
+    manager = main_window.analysis_controller.pipeline.run_manager
 
+    record = create_completed_run(
+        manager,
+        "all-views-refresh-run",
+        400,
+        410,
+    )
+
+    main_window.analysis_controller.thread_finished.emit()
+
+    overview = main_window.overview_view
+    dashboard = main_window.dashboard_view
+    reports = main_window.reports_view
+
+    assert any(
+        item.run_id == record.run_id
+        for item in overview.records
+    )
+
+    assert dashboard.run_table.rowCount() == 1
+    assert (
+        dashboard.run_table.item(0, 0).text()
+        == record.run_id
+    )
+
+    assert reports.run_selector.count() == 1
+    assert reports.selected_run_id == record.run_id
+    
 def test_dashboard_navigation_preserves_existing_pages(main_window):
     expected_pages = (
         "home",
