@@ -1,0 +1,128 @@
+{
+    "run_id": "run_range(100-150)_004",
+    "start_sol": 100,
+    "end_sol": 150,
+    "created_at": "2026-11-09T22:52:46.591474+00:00",
+    "started_at": "2026-11-09T22:52:47.021171+00:00",
+    "finished_at": "2026-11-09T23:04:01.980978+00:00",
+    "input_source": "performance_test",
+    "source_info": {
+        "test_type": "full_pipeline_performance",
+        "original_dataset": "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_dataset",
+        "sample_directory": "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_sample",
+        "dataset_file_count": 714,
+        "selected_sol_count": 51,
+        "selected_start_sol": 100,
+        "selected_end_sol": 150
+    },
+    "settings": {
+        "input_dir": "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_sample",
+        "start_sol": 100,
+        "end_sol": 150,
+        "gap_factor": 2.5,
+        "tolerance": 1.0,
+        "window_size": 10,
+        "min_sol_fraction": 0.5,
+        "min_metrics": 3,
+        "required_products": [
+            "ATS",
+            "PS",
+            "RDS",
+            "RHS",
+            "TIRS",
+            "WS"
+        ],
+        "weight_files": 0.2,
+        "weight_integrity": 0.45,
+        "weight_quality": 0.15,
+        "weight_sync": 0.2,
+        "integrity_timestamps": 1.0,
+        "integrity_values": 1.0,
+        "workers": 1,
+        "execution_summary": {
+            "status": "completed",
+            "error": null,
+            "stages": [
+                {
+                    "stage_name": "file_discovery",
+                    "status": "completed",
+                    "started_at": "2026-11-09T22:52:47.129664+00:00",
+                    "finished_at": "2026-11-09T22:52:47.372641+00:00",
+                    "output_paths": [
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\file_inventory.csv"
+                    ],
+                    "warnings": [],
+                    "errors": []
+                },
+                {
+                    "stage_name": "xml_parser",
+                    "status": "completed",
+                    "started_at": "2026-11-09T22:52:47.573814+00:00",
+                    "finished_at": "2026-11-09T22:52:54.898986+00:00",
+                    "output_paths": [
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\metadata_inventory.json"
+                    ],
+                    "warnings": [],
+                    "errors": []
+                },
+                {
+                    "stage_name": "coverage_analyzer",
+                    "status": "completed",
+                    "started_at": "2026-11-09T22:52:55.102071+00:00",
+                    "finished_at": "2026-11-09T23:00:10.472768+00:00",
+                    "output_paths": [
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\coverage_report.csv",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\coverage_summary.json",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\coverage_range_summary.json"
+                    ],
+                    "warnings": [],
+                    "errors": []
+                },
+                {
+                    "stage_name": "quality_analyzer",
+                    "status": "completed",
+                    "started_at": "2026-11-09T23:00:10.671911+00:00",
+                    "finished_at": "2026-11-09T23:01:51.037085+00:00",
+                    "output_paths": [
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\quality_field_report.csv",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\quality_summary.json",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\quality_range_summary.json"
+                    ],
+                    "warnings": [],
+                    "errors": []
+                },
+                {
+                    "stage_name": "synchronization_analyzer",
+                    "status": "completed",
+                    "started_at": "2026-11-09T23:01:51.236031+00:00",
+                    "finished_at": "2026-11-09T23:04:01.450904+00:00",
+                    "output_paths": [
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\synchronization_file_report.csv",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\synchronization_pair_report.csv",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\synchronization_summary.json",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\synchronization_range_summary.json"
+                    ],
+                    "warnings": [],
+                    "errors": []
+                },
+                {
+                    "stage_name": "period_ranker",
+                    "status": "completed",
+                    "started_at": "2026-11-09T23:04:01.650341+00:00",
+                    "finished_at": "2026-11-09T23:04:01.872256+00:00",
+                    "output_paths": [
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\period_ranking_full.csv",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\period_ranking_full_summary.json",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\period_ranking.csv",
+                        "D:\\projects\\MEDA Data Research & Period Analyzer (MDRPA) _ Branch from mwi\\meda-research-tool\\performance\\performance_test_runs\\runs\\run_range(100-150)_004\\output\\period_ranking_summary.json"
+                    ],
+                    "warnings": [],
+                    "errors": []
+                }
+            ]
+        }
+    },
+    "application_version": null,
+    "status": "COMPLETED",
+    "failure_reason": null
+}

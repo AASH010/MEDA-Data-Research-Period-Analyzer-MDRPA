@@ -1,0 +1,7 @@
+﻿stage_name,status,elapsed_seconds,start_rss_mb,end_rss_mb,peak_rss_mb,peak_increase_mb,output_count,warning_count,error_count,errors
+file_discovery,completed,0.343,32.9,32.94,32.94,0.04,1,0,0,
+xml_parser,completed,7.424,33.93,38.91,38.99,5.07,1,0,0,
+coverage_analyzer,completed,435.472,40.05,43.4,45.23,5.17,3,0,0,
+quality_analyzer,completed,100.464,43.57,44.49,44.5,0.93,3,0,0,
+synchronization_analyzer,completed,130.313,45.16,50.7,57.25,12.09,4,0,0,
+period_ranker,completed,0.321,50.66,53.66,55.62,4.96,4,0,0,

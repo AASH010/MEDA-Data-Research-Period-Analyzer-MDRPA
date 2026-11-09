@@ -1,0 +1,39 @@
+{
+    "analyzer": "MEDA Synchronization Analyzer",
+    "start_sol": 100,
+    "end_sol": 150,
+    "generated_at_utc": "2026-11-09T23:04:01.446851+00:00",
+    "tolerance": 1.0,
+    "tolerance_interpretation": "Applied to the selected time coordinate. It is not guaranteed to represent SI seconds for every time axis.",
+    "total_files": 357,
+    "analysed_files": 357,
+    "unanalysed_files": 0,
+    "file_status_counts": {
+        "analysed": 357
+    },
+    "mapping_status_counts": {
+        "header_exact_match": 255,
+        "header_positional_duplicate_xml_names": 51,
+        "header_positional_ws_aliases": 51
+    },
+    "total_product_pairs": 1071,
+    "analysed_pairs": 1071,
+    "pair_status_counts": {
+        "analysed": 1071
+    },
+    "pairs_with_matches": 1071,
+    "matching_method": "Sorted two-pointer one-to-one matching. Each timestamp occurrence can participate in at most one match.",
+    "important_limitations": [
+        "Products are compared only when they use the same time axis.",
+        "No mission-specific time axis is converted to UTC.",
+        "Tolerance is applied in the selected coordinate.",
+        "Different products may have different sampling schedules.",
+        "A timestamp match does not prove scientific equivalence.",
+        "Temporal overlap does not establish complete measurement coverage.",
+        "Duplicate timestamp occurrences are retained and matched individually.",
+        "Files with missing or identical product codes are excluded from product-pair comparisons.",
+        "Unknown CSV header status is not treated as proof of a headerless file.",
+        "RHS duplicate XML names are mapped positionally only when all non-duplicate positions match.",
+        "WS aliases are accepted only at the two explicitly validated field positions."
+    ]
+}
