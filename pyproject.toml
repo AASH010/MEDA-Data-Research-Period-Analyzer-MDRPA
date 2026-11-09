@@ -1,0 +1,75 @@
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "meda-data-research-period-analyzer"
+version = "0.1.0.dev0"
+description = "A scientific desktop application for exploring, analyzing, and comparing NASA Perseverance MEDA datasets."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Abdelrahman El-Bahnasawi" },
+]
+keywords = [
+    "MEDA",
+    "Mars",
+    "Perseverance",
+    "NASA",
+    "scientific-data",
+    "data-analysis",
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3.13",
+    "Development Status :: 3 - Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Science/Research",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    "PySide6>=6.12,<7.0",
+    "pyqtgraph>=0.14,<0.15",
+    "numpy>=2.2,<3.0",
+    "pandas>=2.3,<4.0",
+    "PyYAML>=6.0,<7.0",
+    "python-dateutil>=3.0,<5.0",
+    "lxml>=6.0,<7.0",
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4,<9.0",
+]
+
+
+[project.scripts]
+mdrpa = "application.main:run"
+
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "application*",
+    "backend*",
+    "gui*",
+]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra"
+pythonpath = ["."]
