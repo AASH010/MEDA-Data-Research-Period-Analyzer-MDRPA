@@ -53,7 +53,7 @@ def create_main_window(
     resolved_paths = (
         paths
         if paths is not None
-        else AppPaths.from_system()
+        else AppPaths.from_project_root()
     )
 
     config = AppConfig(resolved_paths)

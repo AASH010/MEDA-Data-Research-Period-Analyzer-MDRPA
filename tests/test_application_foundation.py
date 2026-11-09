@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from PySide6.QtCore import QSettings, QStandardPaths
+from PySide6.QtCore import QSettings
 
 from application.app_config import AppConfig, DEFAULT_SETTINGS
 from application.app_paths import AppPaths
@@ -34,7 +34,7 @@ def test_app_paths_from_root_resolves_expected_directories(tmp_path):
     assert paths.settings_dir == paths.app_data_dir / "settings"
     assert paths.logs_dir == paths.app_data_dir / "logs"
     assert paths.settings_file == (
-        paths.settings_dir / "application.ini"
+        paths.settings_dir / "user_settings.ini"
     )
 
 
@@ -77,32 +77,43 @@ def test_app_paths_reject_non_path_app_data_dir():
         AppPaths("invalid")
 
 
-def test_app_paths_from_system_uses_qt_app_data_location(
+
+def test_app_paths_from_project_root_resolves_user_data(
     tmp_path,
-    monkeypatch,
 ):
-    expected = tmp_path / "system-app-data"
+    paths = AppPaths.from_project_root(tmp_path)
 
-    monkeypatch.setattr(
-        QStandardPaths,
-        "writableLocation",
-        lambda location: str(expected),
+    assert paths.app_data_dir == (
+        tmp_path / "user_data"
+    ).resolve()
+
+    assert paths.runs_dir == paths.app_data_dir / "runs"
+    assert paths.settings_dir == paths.app_data_dir / "settings"
+    assert paths.logs_dir == paths.app_data_dir / "logs"
+
+    assert paths.settings_file == (
+        paths.settings_dir / "user_settings.ini"
     )
 
-    paths = AppPaths.from_system()
 
-    assert paths.app_data_dir == expected.resolve()
+def test_app_paths_from_project_root_uses_repository_location():
+    paths = AppPaths.from_project_root()
+
+    expected_root = (
+        Path(__file__).resolve().parents[1] / "user_data"
+    ).resolve()
+
+    assert paths.app_data_dir == expected_root
 
 
-def test_app_paths_from_system_rejects_empty_location(monkeypatch):
-    monkeypatch.setattr(
-        QStandardPaths,
-        "writableLocation",
-        lambda location: "",
-    )
+def test_app_paths_from_project_root_rejects_invalid_root():
+    with pytest.raises(TypeError, match="project_root"):
+        AppPaths.from_project_root(123)
 
-    with pytest.raises(RuntimeError, match="application-data location"):
-        AppPaths.from_system()
+    with pytest.raises(ValueError, match="empty"):
+        AppPaths.from_project_root("   ")
+
+
 
 
 def test_app_config_creates_settings_file_and_defaults(tmp_path):

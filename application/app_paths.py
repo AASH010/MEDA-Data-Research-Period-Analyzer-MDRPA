@@ -1,16 +1,14 @@
 
+
 """Application-managed user data paths.
 
-User data is stored in the operating system's application-data location,
-not inside the source repository or application installation directory.
+User data is stored in the project's user_data directory.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-
-from PySide6.QtCore import QStandardPaths
 
 
 __all__ = ["AppPaths"]
@@ -20,10 +18,11 @@ __all__ = ["AppPaths"]
 class AppPaths:
     """Resolved locations used for application-managed user data.
 
-    The root directory is normally obtained from
-    QStandardPaths.AppDataLocation.
+    The default root is:
+        project_root/user_data
 
-    from_root() is provided for isolated tests and explicit deployments.
+    from_root() remains available for isolated tests and
+    explicit deployments.
     """
 
     app_data_dir: Path
@@ -39,30 +38,35 @@ class AppPaths:
         )
 
     @classmethod
-    def from_system(cls) -> "AppPaths":
-        """Resolve the operating system's application-data location.
+    def from_project_root(
+        cls,
+        project_root: str | Path | None = None,
+    ) -> "AppPaths":
+        """Resolve user_data from the project root.
 
-        The Qt application identity should be configured before calling
-        this method so Qt can determine the correct application folder.
+        When project_root is omitted, the repository root is resolved
+        from this module's location, not from the current working
+        directory.
         """
-        location = QStandardPaths.writableLocation(
-            QStandardPaths.StandardLocation.AppDataLocation
-        )
+        if project_root is None:
+            project_root = Path(__file__).resolve().parent.parent
 
-        if not location:
-            raise RuntimeError(
-                "The operating system did not provide an "
-                "application-data location."
+        if not isinstance(project_root, (str, Path)):
+            raise TypeError(
+                "project_root must be a string or pathlib.Path."
             )
 
-        return cls(Path(location))
+        if isinstance(project_root, str) and not project_root.strip():
+            raise ValueError("project_root must not be empty.")
+
+        return cls(Path(project_root) / "user_data")
 
     @classmethod
     def from_root(
         cls,
         root: str | Path,
     ) -> "AppPaths":
-        """Create paths from an explicit root directory.
+        """Create paths from an explicit user_data root.
 
         This method is useful for tests and controlled deployments.
         """
@@ -86,16 +90,16 @@ class AppPaths:
 
     @property
     def logs_dir(self) -> Path:
-        """Directory reserved for application-level logs."""
+        """Central directory containing application and Run logs."""
         return self.app_data_dir / "logs"
 
     @property
     def settings_file(self) -> Path:
         """Persistent application settings file."""
-        return self.settings_dir / "application.ini"
+        return self.settings_dir / "user_settings.ini"
 
     def ensure_directories(self) -> None:
-        """Create the application data directories when required."""
+        """Create the user data directories when required."""
         for directory in (
             self.app_data_dir,
             self.runs_dir,
