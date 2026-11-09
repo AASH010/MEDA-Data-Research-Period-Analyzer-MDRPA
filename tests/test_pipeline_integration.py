@@ -565,3 +565,89 @@ def test_pipeline_integrates_special_constants_from_xml_to_quality_summary(
         "invalid_constant": 1,
         "missing_constant": 1,
     }
+
+    # --------------------------------------------------
+    # Verify XML Metadata -> Coverage Report
+    # --------------------------------------------------
+
+    coverage_rows = read_csv_rows(
+        output_dir / "coverage_report.csv"
+    )
+
+    ats_coverage = next(
+        row
+        for row in coverage_rows
+        if row["product_code"] == "ATS"
+    )
+
+    assert int(ats_coverage["numeric_missing_count"]) >= 1
+    assert int(ats_coverage["numeric_invalid_count"]) >= 1
+
+    assert int(ats_coverage["special_error_count"]) == 0
+    assert int(ats_coverage["special_saturated_count"]) == 0
+    assert int(ats_coverage["special_unknown_count"]) == 0
+    assert int(ats_coverage["special_not_applicable_count"]) == 0
+    assert int(ats_coverage["special_ambiguous_count"]) == 0
+
+    # --------------------------------------------------
+    # Verify Coverage Report -> Period Ranker
+    # --------------------------------------------------
+
+    ranking_summary = read_json(
+        output_dir / "period_ranking_summary.json"
+    )
+
+    sol_metrics = ranking_summary["sol_metrics"]["100"]
+
+    expected_numeric_missing = sum(
+        int(row["numeric_missing_count"])
+        for row in coverage_rows
+    )
+
+    expected_numeric_invalid = sum(
+        int(row["numeric_invalid_count"])
+        for row in coverage_rows
+    )
+
+    expected_numeric_values = sum(
+        int(row["numeric_value_count"])
+        for row in coverage_rows
+    )
+
+    expected_special_error = sum(
+        int(row["special_error_count"])
+        for row in coverage_rows
+    )
+
+    expected_special_saturated = sum(
+        int(row["special_saturated_count"])
+        for row in coverage_rows
+    )
+
+    expected_special_unknown = sum(
+        int(row["special_unknown_count"])
+        for row in coverage_rows
+    )
+
+    expected_special_not_applicable = sum(
+        int(row["special_not_applicable_count"])
+        for row in coverage_rows
+    )
+
+    expected_special_ambiguous = sum(
+        int(row["special_ambiguous_count"])
+        for row in coverage_rows
+    )
+
+    assert sol_metrics["numeric_missing"] == expected_numeric_missing
+    assert sol_metrics["numeric_invalid"] == expected_numeric_invalid
+    assert sol_metrics["numeric_values"] == expected_numeric_values
+
+    assert sol_metrics["special_error"] == expected_special_error
+    assert sol_metrics["special_saturated"] == expected_special_saturated
+    assert sol_metrics["special_unknown"] == expected_special_unknown
+    assert (
+        sol_metrics["special_not_applicable"]
+        == expected_special_not_applicable
+    )
+    assert sol_metrics["special_ambiguous"] == expected_special_ambiguous

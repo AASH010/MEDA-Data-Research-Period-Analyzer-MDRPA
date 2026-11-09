@@ -3344,3 +3344,83 @@ def test_main_workers_zero_uses_choose_workers(cli_dataset, monkeypatch):
 
     assert analyzer.main(cli_args(cli_dataset, "--workers", "0")) == 0
     assert seen["workers"] == 1
+
+def test_analyze_csv_classifies_all_special_constant_categories(tmp_path):
+    csv_path = write_text(
+        tmp_path / "special_constants.csv",
+        "SCLK,TEMPERATURE\n"
+        "1,-999\n"
+        "2,-998\n"
+        "3,-997\n"
+        "4,-996\n"
+        "5,-995\n"
+        "6,-994\n"
+        "7,-993\n"
+        "8,12.5\n"
+        "9,abc\n",
+    )
+
+    xml = make_xml()
+
+    xml["fields"][1]["special_constants"] = [
+        {
+            "missing_constant": "-999",
+            "invalid_constant": "-998",
+            "error_constant": ["-997", "-993"],
+            "saturated_constant": "-996",
+            "unknown_constant": ["-995", "-993"],
+            "not_applicable_constant": "-994",
+        }
+    ]
+
+    result = analyzer.analyze_csv(csv_path, xml)
+
+    assert result["numeric_missing_count"] == 1
+    assert result["numeric_invalid_count"] == 2
+    assert result["numeric_value_count"] == 1
+
+    assert result["special_error_count"] == 1
+    assert result["special_saturated_count"] == 1
+    assert result["special_unknown_count"] == 1
+    assert result["special_not_applicable_count"] == 1
+    assert result["special_ambiguous_count"] == 1
+
+def test_analyze_csv_classifies_all_special_constant_categories(tmp_path):
+    csv_path = write_text(
+        tmp_path / "special_constants.csv",
+        "SCLK,TEMPERATURE\n"
+        "1,-999\n"
+        "2,-998\n"
+        "3,-997\n"
+        "4,-996\n"
+        "5,-995\n"
+        "6,-994\n"
+        "7,-993\n"
+        "8,12.5\n"
+        "9,abc\n",
+    )
+
+    xml = make_xml()
+
+    xml["fields"][1]["special_constants"] = [
+        {
+            "missing_constant": "-999",
+            "invalid_constant": "-998",
+            "error_constant": ["-997", "-993"],
+            "saturated_constant": "-996",
+            "unknown_constant": ["-995", "-993"],
+            "not_applicable_constant": "-994",
+        }
+    ]
+
+    result = analyzer.analyze_csv(csv_path, xml)
+
+    assert result["numeric_missing_count"] == 1
+    assert result["numeric_invalid_count"] == 2
+    assert result["numeric_value_count"] == 1
+
+    assert result["special_error_count"] == 1
+    assert result["special_saturated_count"] == 1
+    assert result["special_unknown_count"] == 1
+    assert result["special_not_applicable_count"] == 1
+    assert result["special_ambiguous_count"] == 1
