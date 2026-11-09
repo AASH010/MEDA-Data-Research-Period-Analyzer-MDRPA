@@ -450,6 +450,11 @@ def analyse_coverage(rows: list[dict]) -> dict:
         "numeric_values": 0,
         "numeric_missing": 0,
         "numeric_invalid": 0,
+        "special_error": 0,
+        "special_saturated": 0,
+        "special_unknown": 0,
+        "special_not_applicable": 0,
+        "special_ambiguous": 0,
     })
 
     fields = (
@@ -460,6 +465,11 @@ def analyse_coverage(rows: list[dict]) -> dict:
         ("numeric_values", "numeric_value_count"),
         ("numeric_missing", "numeric_missing_count"),
         ("numeric_invalid", "numeric_invalid_count"),
+        ("special_error", "special_error_count"),
+        ("special_saturated", "special_saturated_count"),
+        ("special_unknown", "special_unknown_count"),
+        ("special_not_applicable", "special_not_applicable_count"),
+        ("special_ambiguous", "special_ambiguous_count"),
     )
 
     for row in rows:
@@ -478,7 +488,6 @@ def analyse_coverage(rows: list[dict]) -> dict:
                 item[target] += value
 
     return result
-
 
 # ---------------------------------------------------------
 # Quality analysis
@@ -759,6 +768,7 @@ def calculate_sol_metrics(
         "integrity_value_score": integrity_components.get("values"),
         "quality_indicator_score": quality_score,
         "synchronization_score": synchronization_score,
+
         "available_products": len(available_products),
         "available_required_products": available_required_products,
         "required_products": len(required_products or []),
@@ -766,20 +776,35 @@ def calculate_sol_metrics(
             product in available_products
             for product in OPTIONAL_PRODUCTS
         ),
+
         "csv_files": inventory_data.get("csv_files", 0),
         "xml_files": inventory_data.get("xml_files", 0),
         "inventory_entries": inventory_data.get("inventory_entries", 0),
         "missing_pairs": inventory_data.get("missing_pairs", 0),
+
         "coverage_files": coverage_data.get("files", 0),
         "parsed_timestamps": coverage_data.get("parsed_timestamps", 0),
         "missing_timestamps": coverage_data.get("missing_timestamps", 0),
         "invalid_timestamps": coverage_data.get("invalid_timestamps", 0),
+
         "numeric_values": coverage_data.get("numeric_values", 0),
         "numeric_missing": coverage_data.get("numeric_missing", 0),
         "numeric_invalid": coverage_data.get("numeric_invalid", 0),
+
+        # Special Constants: reporting only.
+        # They do not directly affect the Data Integrity score.
+        "special_error": coverage_data.get("special_error", 0),
+        "special_saturated": coverage_data.get("special_saturated", 0),
+        "special_unknown": coverage_data.get("special_unknown", 0),
+        "special_not_applicable": coverage_data.get(
+            "special_not_applicable", 0
+        ),
+        "special_ambiguous": coverage_data.get("special_ambiguous", 0),
+
         "analysed_field_reports": quality_data.get("analysed_fields", 0),
         "range_checked_fields": quality_data.get("range_checked_fields", 0),
         "range_checked_values": checked,
+
         "sync_files_analysed": sync_file_data.get("analysed_files", 0),
         "sync_pairs_analysed": sync_pair_data.get("analysed_pairs", 0),
         "matched_timestamps": sync_pair_data.get("matched_timestamps", 0),
@@ -787,7 +812,6 @@ def calculate_sol_metrics(
             sync_pair_data.get("match_rates", [])
         ),
     }
-
 
 # ---------------------------------------------------------
 # Window aggregation
@@ -1066,9 +1090,10 @@ def build_summary(
             "Product availability does not establish measurement completeness.",
             "Candidate periods require further review before research use.",
             "A missing inventory report makes file availability unavailable; it is not interpreted as zero product availability.",
+            "Special Constants other than missing_constant and invalid_constant are reported separately and do not directly alter the Data Integrity score.",
+            "Ambiguous Special Constant matches are excluded from numeric value, missing, and invalid counters.",
         ],
     }
-
 
 # ---------------------------------------------------------
 # Main analysis

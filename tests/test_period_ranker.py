@@ -2420,4 +2420,82 @@ def test_main_entrypoint_converts_runtime_errors_to_system_exit(
             str(Path(ranker.__file__).resolve()),
             run_name="__main__",
         )
-        
+
+def test_analyse_coverage_aggregates_special_constant_counts():
+    result = ranker.analyse_coverage([
+        {
+            "sol_number": "100",
+            "row_count": "10",
+            "numeric_value_count": "5",
+            "numeric_missing_count": "2",
+            "numeric_invalid_count": "1",
+            "special_error_count": "1",
+            "special_saturated_count": "2",
+            "special_unknown_count": "3",
+            "special_not_applicable_count": "4",
+            "special_ambiguous_count": "1",
+        },
+        {
+            "sol_number": "100",
+            "row_count": "5",
+            "numeric_value_count": "3",
+            "numeric_missing_count": "1",
+            "numeric_invalid_count": "0",
+            "special_error_count": "2",
+            "special_saturated_count": "0",
+            "special_unknown_count": "1",
+            "special_not_applicable_count": "0",
+            "special_ambiguous_count": "0",
+        },
+    ])
+
+    assert result[100]["special_error"] == 3
+    assert result[100]["special_saturated"] == 2
+    assert result[100]["special_unknown"] == 4
+    assert result[100]["special_not_applicable"] == 4
+    assert result[100]["special_ambiguous"] == 1
+
+
+def test_analyse_coverage_supports_old_reports_without_special_counts():
+    result = ranker.analyse_coverage([
+        {
+            "sol_number": "100",
+            "row_count": "10",
+            "numeric_value_count": "8",
+            "numeric_missing_count": "1",
+            "numeric_invalid_count": "1",
+        },
+    ])
+
+    assert result[100]["numeric_values"] == 8
+    assert result[100]["numeric_missing"] == 1
+    assert result[100]["numeric_invalid"] == 1
+
+    assert result[100]["special_error"] == 0
+    assert result[100]["special_saturated"] == 0
+    assert result[100]["special_unknown"] == 0
+    assert result[100]["special_not_applicable"] == 0
+    assert result[100]["special_ambiguous"] == 0
+
+def test_special_constant_counters_do_not_change_integrity_score():
+    coverage_data = {
+        "numeric_values": 80,
+        "numeric_missing": 10,
+        "numeric_invalid": 10,
+        "special_error": 5,
+        "special_saturated": 10,
+        "special_unknown": 3,
+        "special_not_applicable": 2,
+        "special_ambiguous": 1,
+    }
+
+    score, components = ranker.calculate_integrity(
+        coverage_data,
+        {
+            "timestamps": 0,
+            "values": 1,
+        },
+    )
+
+    assert score == pytest.approx(80)
+    assert components["values"] == pytest.approx(80)
