@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
@@ -24,7 +25,18 @@ from backend.pipeline.pipeline_validator import (
 )
 
 
-__all__ = ["AnalysisConfigurationView"]
+__all__ = ["AnalysisConfigurationView", "WORKER_CHOICES"]
+
+
+# (label, value) pairs for the "Parallel workers" selector.
+# Index 0 is the default and must stay sequential.
+WORKER_CHOICES: tuple[tuple[str, int | str], ...] = (
+    ("Sequential (1 worker)", 1),
+    ("Optimized (automatic)", "optimized"),
+    ("2 workers", 2),
+    ("4 workers", 4),
+    ("8 workers", 8),
+)
 
 
 class AnalysisConfigurationView(QWidget):
@@ -129,6 +141,18 @@ class AnalysisConfigurationView(QWidget):
             "integrity_values", 1.0, 0.0, 1000000.0
         )
 
+        self.workers_combo = QComboBox(self)
+        self.workers_combo.setObjectName("workers")
+
+        for label, value in WORKER_CHOICES:
+            self.workers_combo.addItem(label, value)
+
+        self.workers_combo.setToolTip(
+            "Optimized picks the number of processes from your CPU "
+            "and the number of CSV files. Sequential is the safest "
+            "choice."
+        )
+
         form.addRow("Input dataset:", self.dataset_edit)
         form.addRow("Start Sol (optional):", self.start_sol_edit)
         form.addRow("End Sol (optional):", self.end_sol_edit)
@@ -165,6 +189,7 @@ class AnalysisConfigurationView(QWidget):
             "Value integrity weight:",
             self.integrity_values_spin,
         )
+        form.addRow("Parallel workers:", self.workers_combo)
 
         actions = QHBoxLayout()
 
@@ -336,6 +361,7 @@ class AnalysisConfigurationView(QWidget):
                 self.integrity_timestamps_spin.value()
             ),
             integrity_values=self.integrity_values_spin.value(),
+            workers=self.workers_combo.currentData(),
         )
 
         return validate_pipeline_config(config)
@@ -381,6 +407,8 @@ class AnalysisConfigurationView(QWidget):
 
         self.integrity_timestamps_spin.setValue(1.0)
         self.integrity_values_spin.setValue(1.0)
+
+        self.workers_combo.setCurrentIndex(0)
 
         self._validated_config = None
 

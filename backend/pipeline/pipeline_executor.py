@@ -642,11 +642,21 @@ def execute_pipeline_stages(
         nonlocal observed_start, observed_end
         nonlocal selected_start, selected_end
 
+        csv_file_count = coverage_analyzer.count_csv_records(
+            inventory_records
+        )
+
+        effective_workers = coverage_analyzer.choose_workers(
+            config.workers,
+            csv_file_count,
+        )
+
         coverage_reports = coverage_analyzer.analyze_coverage(
             input_dir,
             inventory_records,
             metadata_inventory,
             gap_factor=config.gap_factor,
+            workers=effective_workers,
         )
 
         # Detailed coverage remains a full-dataset report.
@@ -761,6 +771,11 @@ def execute_pipeline_stages(
                 "observed_range": {
                     "start_sol": observed_start,
                     "end_sol": observed_end,
+                },
+                "parallelism": {
+                    "workers_requested": config.workers,
+                    "workers_used": effective_workers,
+                    "csv_files": csv_file_count,
                 },
             },
             (),

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -9,9 +8,11 @@ import os
 import re
 import statistics
 
+from array import array
+from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-from itertools import chain, combinations
+from itertools import chain, combinations, islice
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -130,6 +131,23 @@ def get_sol_number(value: Any) -> int | None:
     match = SOL_PATTERN.match(str(value).strip())
 
     return int(match.group(1)) if match else None
+
+
+def inventory_sol_number(inventory_row: dict) -> int | None:
+    """
+    Sol number of an inventory row: sol_number first,
+    sol_folder as the fallback.
+    """
+    sol_number = get_sol_number(
+        inventory_row.get("sol_number")
+    )
+
+    if sol_number is None:
+        sol_number = get_sol_number(
+            inventory_row.get("sol_folder")
+        )
+
+    return sol_number
 
 
 def portable_path(value: Any) -> str:
@@ -352,14 +370,7 @@ def find_metadata_record(
             return None, "ambiguous_metadata_path"
 
     # Priority 2: Sol number + filename stem.
-    sol_number = get_sol_number(
-        inventory_row.get("sol_number")
-    )
-
-    if sol_number is None:
-        sol_number = get_sol_number(
-            inventory_row.get("sol_folder")
-        )
+    sol_number = inventory_sol_number(inventory_row)
 
     if sol_number is not None:
         matches = index["by_sol_name"].get(
@@ -389,10 +400,43 @@ def find_metadata_record(
 # CSV path resolution
 # ---------------------------------------------------------
 
+class FileIndex:
+    """
+    Lazy filename index of the input tree.
+
+    The tree is walked at most once (on the first fallback lookup)
+    instead of once per CSV file. The index stores traversal paths
+    grouped by case-folded filename; every candidate is still
+    validated by resolve_csv_path's safe_file() at lookup time, so
+    symlink and path-traversal rules are unchanged.
+    """
+
+    def __init__(self) -> None:
+        self._root: Path | None = None
+        self._by_name: dict[str, list[Path]] | None = None
+
+    def candidates(
+        self,
+        root: Path,
+        filename: str,
+    ) -> list[Path]:
+
+        if self._by_name is None or self._root != root:
+            by_name = defaultdict(list)
+
+            for path in root.rglob("*"):
+                by_name[path.name.casefold()].append(path)
+
+            self._by_name = by_name
+            self._root = root
+
+        return self._by_name.get(filename.casefold(), [])
+
 
 def resolve_csv_path(
     input_root: Path,
     inventory_row: dict,
+    file_index: FileIndex | None = None,
 ) -> Path | None:
     """
     Resolve an inventory CSV path strictly inside input_root.
@@ -401,6 +445,9 @@ def resolve_csv_path(
     when it resolves uniquely inside the input root.
 
     Symbolic links and path traversal outside input_root are rejected.
+
+    file_index is optional. Passing one shared FileIndex avoids
+    re-walking the input tree for every file.
     """
     try:
         root = Path(input_root).expanduser().resolve()
@@ -409,6 +456,9 @@ def resolve_csv_path(
 
     if not root.is_dir():
         return None
+
+    if file_index is None:
+        file_index = FileIndex()
 
     def safe_file(candidate: Path) -> Path | None:
         try:
@@ -471,8 +521,10 @@ def resolve_csv_path(
 
             matches = []
 
-            for path in sol_directory.rglob("*"):
-                if path.name.casefold() != filename.casefold():
+            for path in file_index.candidates(root, filename):
+                try:
+                    path.relative_to(sol_directory)
+                except ValueError:
                     continue
 
                 resolved = safe_file(path)
@@ -488,10 +540,7 @@ def resolve_csv_path(
 
     matches = []
 
-    for path in root.rglob("*"):
-        if path.name.casefold() != filename.casefold():
-            continue
-
+    for path in file_index.candidates(root, filename):
         resolved = safe_file(path)
 
         if resolved is not None:
@@ -732,17 +781,8 @@ def empty_file_report(
     notes: str,
 ) -> dict:
 
-    sol_number = get_sol_number(
-        inventory_row.get("sol_number")
-    )
-
-    if sol_number is None:
-        sol_number = get_sol_number(
-            inventory_row.get("sol_folder")
-        )
-
     return {
-        "sol_number": sol_number,
+        "sol_number": inventory_sol_number(inventory_row),
         "sol_folder": inventory_row.get("sol_folder", ""),
         "product_code": inventory_row.get("product_code", ""),
         "csv_file": inventory_row.get("filename", ""),
@@ -817,7 +857,7 @@ def analyse_timestamp_file(
     report["selected_time_field"] = time_name
     report["time_kind"] = time_kind
 
-    timestamps = []
+    timestamps: list[float] = []
     previous_timestamp = None
 
     out_of_order_count = 0
@@ -869,12 +909,16 @@ def analyse_timestamp_file(
             if not skip_header:
                 rows = chain((first_row,), reader)
 
+            # Local bindings for the hot loop.
+            append = timestamps.append
+            missing_text = MISSING_TEXT
+            isfinite = math.isfinite
+            parse = time_parser
+
             for row in rows:
 
-                if not row or not any(
-                    str(value).strip()
-                    for value in row
-                ):
+                # Equivalent to: not any(str(v).strip() for v in row)
+                if not row or not "".join(row).strip():
                     continue
 
                 total_rows += 1
@@ -885,12 +929,12 @@ def analyse_timestamp_file(
 
                 raw_value = row[csv_time_index].strip()
 
-                if raw_value.casefold() in MISSING_TEXT:
+                if raw_value.casefold() in missing_text:
                     missing_count += 1
                     continue
 
                 try:
-                    parsed_value = time_parser(raw_value)
+                    parsed_value = parse(raw_value)
                 except (
                     TypeError,
                     ValueError,
@@ -902,9 +946,18 @@ def analyse_timestamp_file(
                     invalid_count += 1
                     continue
 
-                timestamp = safe_float(parsed_value)
+                # Inlined safe_float().
+                try:
+                    timestamp = float(parsed_value)
+                except (
+                    TypeError,
+                    ValueError,
+                    OverflowError,
+                ):
+                    invalid_count += 1
+                    continue
 
-                if timestamp is None:
+                if not isfinite(timestamp):
                     invalid_count += 1
                     continue
 
@@ -915,7 +968,7 @@ def analyse_timestamp_file(
                     out_of_order_count += 1
 
                 previous_timestamp = timestamp
-                timestamps.append(timestamp)
+                append(timestamp)
 
     except (OSError, UnicodeError, csv.Error) as error:
         report["analysis_status"] = "read_error"
@@ -934,17 +987,30 @@ def analyse_timestamp_file(
 
         return report, []
 
-    sorted_timestamps = sorted(timestamps)
-    timestamp_counts = Counter(sorted_timestamps)
+    # If no decreasing step was seen, the list is already sorted;
+    # skip the extra sorted copy.
+    if out_of_order_count:
+        sorted_timestamps = sorted(timestamps)
+    else:
+        sorted_timestamps = timestamps
 
-    positive_steps = [
-        second - first
-        for first, second in zip(
-            sorted_timestamps,
-            sorted_timestamps[1:],
-        )
-        if second > first
-    ]
+    # One pass over the sorted values:
+    # - a strictly positive step is recorded;
+    # - an equal neighbour is a duplicate occurrence
+    #   (identical to sum(count - 1) over a Counter).
+    positive_steps = array("d")
+    add_step = positive_steps.append
+    duplicate_count = 0
+
+    previous = sorted_timestamps[0]
+
+    for current in islice(sorted_timestamps, 1, None):
+        if current > previous:
+            add_step(current - previous)
+        else:
+            duplicate_count += 1
+
+        previous = current
 
     median_step = (
         round(statistics.median(positive_steps), 6)
@@ -971,14 +1037,10 @@ def analyse_timestamp_file(
     report.update({
         "analysis_status": "analysed",
         "total_rows": total_rows,
-        "parsed_timestamps": len(timestamps),
+        "parsed_timestamps": len(sorted_timestamps),
         "missing_timestamps": missing_count,
         "invalid_timestamps": invalid_count,
-        "duplicate_timestamps": sum(
-            count - 1
-            for count in timestamp_counts.values()
-            if count > 1
-        ),
+        "duplicate_timestamps": duplicate_count,
         "out_of_order_timestamps": out_of_order_count,
         "median_step": median_step,
         "first_timestamp": sorted_timestamps[0],
@@ -992,6 +1054,51 @@ def analyse_timestamp_file(
 # ---------------------------------------------------------
 # One-to-one timestamp matching
 # ---------------------------------------------------------
+
+def _match_range(
+    first,
+    i: int,
+    i_end: int,
+    second,
+    j: int,
+    j_end: int,
+    tolerance: float,
+) -> tuple[int, array]:
+    """
+    Two-pointer one-to-one matching over sorted slices
+    first[i:i_end] and second[j:j_end], without copying them.
+
+    Each timestamp occurrence can participate in at most
+    one match. Duplicate timestamps remain separate observations.
+
+    Inputs must already be sorted in ascending order.
+    """
+
+    differences = array("d")
+    add_difference = differences.append
+    matched = 0
+
+    while i < i_end and j < j_end:
+
+        a = first[i]
+        b = second[j]
+
+        absolute_difference = abs(a - b)
+
+        if absolute_difference <= tolerance:
+            matched += 1
+            add_difference(absolute_difference)
+            i += 1
+            j += 1
+
+        elif a < b:
+            i += 1
+
+        else:
+            j += 1
+
+    return matched, differences
+
 
 def match_one_to_one(
     first: list[float],
@@ -1020,44 +1127,30 @@ def match_one_to_one(
     first = sorted(first)
     second = sorted(second)
 
-    i = 0
-    j = 0
+    matched, differences = _match_range(
+        first,
+        0,
+        len(first),
+        second,
+        0,
+        len(second),
+        tolerance,
+    )
 
-    matched = 0
-    differences = []
-
-    while i < len(first) and j < len(second):
-
-        difference = first[i] - second[j]
-        absolute_difference = abs(difference)
-
-        if absolute_difference <= tolerance:
-            matched += 1
-            differences.append(absolute_difference)
-            i += 1
-            j += 1
-
-        elif first[i] < second[j]:
-            i += 1
-
-        else:
-            j += 1
-
-    return matched, differences
+    return matched, list(differences)
 
 
-def compare_timestamp_series(
-    first: list[float],
-    second: list[float],
+def _compare_sorted_series(
+    first,
+    second,
     tolerance: float,
     kind_first: str,
     kind_second: str,
 ) -> dict:
-
-    if not math.isfinite(tolerance) or tolerance < 0:
-        raise ValueError(
-            "Tolerance must be finite and non-negative."
-        )
+    """
+    Same as compare_timestamp_series, but the caller guarantees
+    that both sequences are already sorted ascending.
+    """
 
     result = {
         "comparison_status": "analysed",
@@ -1087,15 +1180,10 @@ def compare_timestamp_series(
         )
         return result
 
-    if not first or not second:
+    if not len(first) or not len(second):
         result["comparison_status"] = "empty_series"
         result["notes"] = "At least one timestamp series is empty."
         return result
-
-    # Public callers may provide unsorted lists.
-    # Sort copies, retaining every duplicate occurrence.
-    first = sorted(first)
-    second = sorted(second)
 
     overlap_start = max(first[0], second[0])
     overlap_end = min(first[-1], second[-1])
@@ -1105,25 +1193,26 @@ def compare_timestamp_series(
         result["notes"] = "The timestamp series do not overlap."
         return result
 
-    # Compare only observations inside the common interval.
-    first_overlap = [
-        value for value in first
-        if overlap_start <= value <= overlap_end
-    ]
+    # Observations inside the common closed interval, located by
+    # binary search instead of copying filtered lists.
+    first_lo = bisect_left(first, overlap_start)
+    first_hi = bisect_right(first, overlap_end)
 
-    second_overlap = [
-        value for value in second
-        if overlap_start <= value <= overlap_end
-    ]
+    second_lo = bisect_left(second, overlap_start)
+    second_hi = bisect_right(second, overlap_end)
 
-    matched, differences = match_one_to_one(
-        first_overlap,
-        second_overlap,
+    matched, differences = _match_range(
+        first,
+        first_lo,
+        first_hi,
+        second,
+        second_lo,
+        second_hi,
         tolerance,
     )
 
-    first_count = len(first_overlap)
-    second_count = len(second_overlap)
+    first_count = first_hi - first_lo
+    second_count = second_hi - second_lo
 
     first_unmatched = first_count - matched
     second_unmatched = second_count - matched
@@ -1162,7 +1251,9 @@ def compare_timestamp_series(
         "match_rate_sparser_percent": round(sparser_rate, 3),
     })
 
-    if differences:
+    if len(differences):
+        # statistics.mean is kept on purpose: it is exactly rounded,
+        # so reports stay identical to the previous version.
         result["mean_match_difference"] = round(
             statistics.mean(differences),
             6,
@@ -1195,9 +1286,205 @@ def compare_timestamp_series(
     return result
 
 
+def compare_timestamp_series(
+    first: list[float],
+    second: list[float],
+    tolerance: float,
+    kind_first: str,
+    kind_second: str,
+) -> dict:
+    """
+    Public entry point. Accepts unsorted input and sorts copies,
+    retaining every duplicate occurrence.
+    """
+
+    if not math.isfinite(tolerance) or tolerance < 0:
+        raise ValueError(
+            "Tolerance must be finite and non-negative."
+        )
+
+    return _compare_sorted_series(
+        sorted(first),
+        sorted(second),
+        tolerance,
+        kind_first,
+        kind_second,
+    )
+
+
 # ---------------------------------------------------------
 # Full analysis
 # ---------------------------------------------------------
+
+def _process_csv_row(
+    position: int,
+    total: int,
+    inventory_row: dict,
+    input_root: Path,
+    file_index: FileIndex,
+    metadata_index: dict,
+    processed_paths: set,
+    axis_preference,
+    file_reports: list[dict],
+    series_by_sol: dict,
+) -> None:
+    """
+    Analyse one inventory CSV row.
+
+    Appends exactly one report to file_reports (or none for a
+    duplicate path) and, for analysed files with a known Sol,
+    stores the compact timestamp series in series_by_sol.
+    """
+
+    csv_path = resolve_csv_path(
+        input_root,
+        inventory_row,
+        file_index,
+    )
+
+    if csv_path is None:
+        file_reports.append(
+            empty_file_report(
+                inventory_row,
+                "file_not_found_or_ambiguous",
+                "CSV path could not be resolved uniquely.",
+            )
+        )
+        return
+
+    # resolve_csv_path already returns a resolved path.
+    resolved_path = os.path.normcase(str(csv_path))
+
+    if resolved_path in processed_paths:
+        return
+
+    processed_paths.add(resolved_path)
+
+    xml_record, metadata_status = find_metadata_record(
+        inventory_row,
+        metadata_index,
+    )
+
+    if xml_record is None:
+        file_reports.append(
+            empty_file_report(
+                inventory_row,
+                metadata_status,
+                "A unique matching XML metadata record was not found.",
+            )
+        )
+        return
+
+    try:
+        file_size = csv_path.stat().st_size
+    except OSError as error:
+        file_reports.append(
+            empty_file_report(
+                inventory_row,
+                "file_stat_error",
+                str(error),
+            )
+        )
+        return
+
+    if file_size == 0:
+        file_reports.append(
+            empty_file_report(
+                inventory_row,
+                "empty_file",
+                "CSV file has zero bytes.",
+            )
+        )
+        return
+
+    print(
+        f"[{position}/{total}] "
+        f"Analysing {csv_path.name}"
+    )
+
+    report, timestamps = analyse_timestamp_file(
+        csv_path,
+        inventory_row,
+        xml_record,
+        axis_preference,
+    )
+
+    if metadata_status != "matched_by_sol_and_name":
+        previous_notes = report.get("notes", "")
+
+        report["notes"] = (
+            previous_notes + " "
+            if previous_notes
+            else ""
+        ) + f"Metadata matching method: {metadata_status}."
+
+    file_reports.append(report)
+
+    if (
+        timestamps
+        and report["analysis_status"] == "analysed"
+    ):
+
+        sol_number = inventory_sol_number(inventory_row)
+
+        if sol_number is None:
+            report["notes"] += (
+                " File was not included in pair comparisons "
+                "because its Sol number could not be identified."
+            )
+            return
+
+        series_by_sol[sol_number].append({
+            "product_code": str(
+                inventory_row.get("product_code") or ""
+            ).strip(),
+            "csv_file": csv_path.name,
+            # Compact contiguous doubles; already sorted.
+            "timestamps": array("d", timestamps),
+            "time_kind": report["time_kind"],
+        })
+
+
+def _compare_sol_products(
+    sol_number: int,
+    products: list[dict],
+    tolerance: float,
+) -> list[dict]:
+    """Compare every pair of different products within one Sol."""
+
+    pair_reports = []
+
+    for first, second in combinations(products, 2):
+
+        first_product = first["product_code"]
+        second_product = second["product_code"]
+
+        # Pair comparisons require two known, different products.
+        if not first_product or not second_product:
+            continue
+
+        if first_product.casefold() == second_product.casefold():
+            continue
+
+        comparison = _compare_sorted_series(
+            first["timestamps"],
+            second["timestamps"],
+            tolerance,
+            first["time_kind"],
+            second["time_kind"],
+        )
+
+        pair_reports.append({
+            "sol_number": sol_number,
+            "product_1": first_product,
+            "file_1": first["csv_file"],
+            "product_2": second_product,
+            "file_2": second["csv_file"],
+            **comparison,
+        })
+
+    return pair_reports
+
 
 def run_analysis(
     input_root: Path,
@@ -1222,9 +1509,27 @@ def run_analysis(
         .lstrip(".") == "csv"
     ]
 
-    print(f"CSV inventory entries: {len(csv_rows)}")
+    total = len(csv_rows)
 
+    print(f"CSV inventory entries: {total}")
+
+    # Last position of each Sol in the inventory. Once the last
+    # file of a Sol is processed its series are compared and freed,
+    # so peak memory is one Sol instead of the whole dataset.
+    last_position_by_sol = {}
+
+    for position, inventory_row in enumerate(
+        csv_rows,
+        start=1,
+    ):
+        sol_number = inventory_sol_number(inventory_row)
+
+        if sol_number is not None:
+            last_position_by_sol[sol_number] = position
+
+    file_index = FileIndex()
     file_reports = []
+    pair_reports = []
     series_by_sol = defaultdict(list)
     processed_paths = set()
 
@@ -1233,153 +1538,42 @@ def run_analysis(
         start=1,
     ):
 
-        csv_path = resolve_csv_path(
+        _process_csv_row(
+            position,
+            total,
+            inventory_row,
             input_root,
-            inventory_row,
-        )
-
-        if csv_path is None:
-            file_reports.append(
-                empty_file_report(
-                    inventory_row,
-                    "file_not_found_or_ambiguous",
-                    "CSV path could not be resolved uniquely.",
-                )
-            )
-            continue
-
-        resolved_path = file_identity(csv_path)
-
-        if resolved_path in processed_paths:
-            continue
-
-        processed_paths.add(resolved_path)
-
-        xml_record, metadata_status = find_metadata_record(
-            inventory_row,
+            file_index,
             metadata_index,
-        )
-
-        if xml_record is None:
-            file_reports.append(
-                empty_file_report(
-                    inventory_row,
-                    metadata_status,
-                    "A unique matching XML metadata record was not found.",
-                )
-            )
-            continue
-
-        try:
-            file_size = csv_path.stat().st_size
-        except OSError as error:
-            file_reports.append(
-                empty_file_report(
-                    inventory_row,
-                    "file_stat_error",
-                    str(error),
-                )
-            )
-            continue
-
-        if file_size == 0:
-            file_reports.append(
-                empty_file_report(
-                    inventory_row,
-                    "empty_file",
-                    "CSV file has zero bytes.",
-                )
-            )
-            continue
-
-        print(
-            f"[{position}/{len(csv_rows)}] "
-            f"Analysing {csv_path.name}"
-        )
-
-        report, timestamps = analyse_timestamp_file(
-            csv_path,
-            inventory_row,
-            xml_record,
+            processed_paths,
             axis_preference,
+            file_reports,
+            series_by_sol,
         )
 
-        if metadata_status != "matched_by_sol_and_name":
-            previous_notes = report.get("notes", "")
-
-            report["notes"] = (
-                previous_notes + " "
-                if previous_notes
-                else ""
-            ) + f"Metadata matching method: {metadata_status}."
-
-        file_reports.append(report)
+        sol_number = inventory_sol_number(inventory_row)
 
         if (
-            timestamps
-            and report["analysis_status"] == "analysed"
+            sol_number is not None
+            and last_position_by_sol.get(sol_number) == position
         ):
+            products = series_by_sol.pop(sol_number, None)
 
-            sol_number = get_sol_number(
-                inventory_row.get("sol_number")
-            )
-
-            if sol_number is None:
-                sol_number = get_sol_number(
-                    inventory_row.get("sol_folder")
+            if products:
+                pair_reports.extend(
+                    _compare_sol_products(
+                        sol_number,
+                        products,
+                        tolerance,
+                    )
                 )
 
-            if sol_number is None:
-                report["notes"] += (
-                    " File was not included in pair comparisons "
-                    "because its Sol number could not be identified."
-                )
-                continue
+    # Every Sol is flushed at its last inventory position, so
+    # series_by_sol is empty here.
 
-            series_by_sol[sol_number].append({
-                "product_code": str(
-                    inventory_row.get("product_code") or ""
-                ).strip(),
-                "csv_file": csv_path.name,
-                "timestamps": timestamps,
-                "time_kind": report["time_kind"],
-            })
-
-    # Compare different products within each Sol.
-    pair_reports = []
-
-    for sol_number in sorted(series_by_sol):
-
-        products = series_by_sol[sol_number]
-
-        for first, second in combinations(products, 2):
-
-            first_product = first["product_code"]
-            second_product = second["product_code"]
-
-            # Pair comparisons require two known, different products.
-            if not first_product or not second_product:
-                continue
-
-            if first_product.casefold() == second_product.casefold():
-                continue
-
-            comparison = compare_timestamp_series(
-                first["timestamps"],
-                second["timestamps"],
-                tolerance,
-                first["time_kind"],
-                second["time_kind"],
-            )
-
-            pair_reports.append({
-                "sol_number": sol_number,
-                "product_1": first_product,
-                "file_1": first["csv_file"],
-                "product_2": second_product,
-                "file_2": second["csv_file"],
-                **comparison,
-            })
+    # Original order: ascending Sol, original pair order inside a Sol.
+    # list.sort is stable, so the per-Sol order is preserved.
+    pair_reports.sort(key=lambda row: row["sol_number"])
 
     return file_reports, pair_reports
 
@@ -1725,3 +1919,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    

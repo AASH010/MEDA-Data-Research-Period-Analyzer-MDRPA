@@ -19,6 +19,7 @@ from backend.pipeline.pipeline_validator import (
 )
 from gui.analysis.analysis_configuration_view import (
     AnalysisConfigurationView,
+    WORKER_CHOICES,
 )
 from gui.input_manager.input_manager_view import InputManagerView
 from gui.main_window.main_window import MainWindow
@@ -392,3 +393,61 @@ def test_unvalidated_input_never_reaches_configuration(
 
     assert input_view.validate_dataset() is True
     assert config_view.input_directory == dataset.resolve()
+
+
+# --------------------------------------------------
+# Parallel workers selector
+# --------------------------------------------------
+
+def _select_workers(view, value):
+    index = view.workers_combo.findData(value)
+    assert index >= 0, f"no combo item for {value!r}"
+    view.workers_combo.setCurrentIndex(index)
+
+
+def test_workers_combo_exists_with_object_name(config_view):
+    assert config_view.workers_combo.objectName() == "workers"
+    assert config_view.workers_combo.count() == len(WORKER_CHOICES)
+
+
+def test_workers_default_is_sequential(config_view):
+    assert config_view.workers_combo.currentIndex() == 0
+    assert config_view.workers_combo.currentData() == 1
+    assert config_view.build_config().workers == 1
+
+
+def test_workers_choices_contain_optimized_and_numbers(config_view):
+    values = [
+        config_view.workers_combo.itemData(index)
+        for index in range(config_view.workers_combo.count())
+    ]
+
+    assert values == [1, "optimized", 2, 4, 8]
+
+
+def test_selecting_optimized_reaches_config(config_view):
+    _select_workers(config_view, "optimized")
+
+    assert config_view.build_config().workers == "optimized"
+
+
+def test_selecting_four_workers_reaches_config(config_view):
+    _select_workers(config_view, 4)
+
+    assert config_view.build_config().workers == 4
+
+
+def test_validated_config_carries_workers(config_view):
+    _select_workers(config_view, 2)
+
+    assert config_view.validate_configuration() is True
+    assert config_view._validated_config.workers == 2
+
+
+def test_reset_defaults_restores_sequential_workers(config_view):
+    _select_workers(config_view, "optimized")
+
+    config_view.reset_defaults()
+
+    assert config_view.workers_combo.currentIndex() == 0
+    assert config_view.build_config().workers == 1

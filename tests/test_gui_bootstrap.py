@@ -254,3 +254,28 @@ def test_main_returns_application_exit_code(monkeypatch):
     fake_window.show.assert_called_once_with()
     fake_window.show_first_launch_tutorial.assert_called_once_with()
     fake_application.exec.assert_called_once_with()
+
+
+def test_run_enables_freeze_support_before_starting_main(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        "application.main.multiprocessing.freeze_support",
+        lambda: calls.append("freeze_support"),
+    )
+    monkeypatch.setattr(
+        "application.main.main",
+        lambda: calls.append("main") or 5,
+    )
+
+    from application.main import run
+
+    assert run() == 5
+    assert calls == ["freeze_support", "main"]
+
+
+def test_run_is_exported():
+    import application.main as entry
+
+    assert "run" in entry.__all__
+    assert callable(entry.run)

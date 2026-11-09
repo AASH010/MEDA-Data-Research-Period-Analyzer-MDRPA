@@ -382,7 +382,7 @@ def _patch_successful_analyzers(
     monkeypatch.setattr(
         pipeline_executor.coverage_analyzer,
         "analyze_coverage",
-        lambda input_dir, inventory, metadata, gap_factor: (
+        lambda input_dir, inventory, metadata, gap_factor, workers=1: (
             coverage_reports
         ),
     )
@@ -1628,3 +1628,218 @@ def test_pipeline_executor_fails_when_expected_artifact_is_missing(
         "skipped",
         "skipped",
     ]
+
+
+# =========================================================
+# Workers (Coverage Analyzer parallelism)
+# =========================================================
+
+
+def test_workers_defaults_to_one(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    config = validate_pipeline_config({"input_dir": input_dir})
+
+    assert config.workers == 1
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1, 1),
+        (4, 4),
+        (64, 64),
+        ("optimized", "optimized"),
+        (" Optimized ", "optimized"),
+        ("OPTIMIZED", "optimized"),
+    ],
+)
+def test_valid_workers_are_accepted_and_normalized(
+    tmp_path, value, expected
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    config = validate_pipeline_config(
+        {"input_dir": input_dir, "workers": value}
+    )
+
+    assert config.workers == expected
+
+
+@pytest.mark.parametrize(
+    "value", [True, False, 2.5, None, [2], {"a": 1}]
+)
+def test_workers_wrong_type_raises_type_error(tmp_path, value):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    with pytest.raises(TypeError):
+        validate_pipeline_config(
+            {"input_dir": input_dir, "workers": value}
+        )
+
+
+@pytest.mark.parametrize("value", [0, -1, 65, "auto", ""])
+def test_workers_bad_value_raises_value_error(tmp_path, value):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    with pytest.raises(ValueError):
+        validate_pipeline_config(
+            {"input_dir": input_dir, "workers": value}
+        )
+
+
+def test_workers_works_on_config_instances(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    config = validate_pipeline_config(
+        PipelineConfig(input_dir=input_dir, workers="optimized")
+    )
+
+    assert config.workers == "optimized"
+
+
+def test_workers_does_not_break_unknown_key_rejection(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    with pytest.raises(ValueError):
+        validate_pipeline_config(
+            {"input_dir": input_dir, "workers": 2, "bogus": 1}
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1, 1), (2, 2), ("optimized", "optimized")],
+)
+def test_run_settings_snapshot_records_workers(tmp_path, value, expected):
+    import json as _json
+
+    from backend.pipeline.analysis_pipeline import AnalysisPipeline
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    config = validate_pipeline_config(
+        {"input_dir": input_dir, "workers": value}
+    )
+
+    settings = AnalysisPipeline._config_settings(config)
+
+    assert settings["workers"] == expected
+    _json.dumps(settings)  # must stay JSON-compatible
+    assert list(settings)[-1] == "workers"
+
+
+def test_run_settings_snapshot_defaults_workers_to_one(tmp_path):
+    from backend.pipeline.analysis_pipeline import AnalysisPipeline
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    config = validate_pipeline_config({"input_dir": input_dir})
+
+    assert AnalysisPipeline._config_settings(config)["workers"] == 1
+
+
+# =========================================================
+# Executor: workers pass-through
+# =========================================================
+
+
+def _run_with_workers_spy(tmp_path, monkeypatch, sols, **config_values):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    run_paths = RunPaths.create("executor-workers", tmp_path / "runs")
+
+    config = PipelineConfig(input_dir=input_dir, **config_values)
+    _patch_successful_analyzers(monkeypatch, sols=sols)
+
+    patched = pipeline_executor.coverage_analyzer.analyze_coverage
+    seen = {}
+
+    def spy(*args, **kwargs):
+        seen["workers"] = kwargs.get("workers")
+        return patched(*args, **kwargs)
+
+    monkeypatch.setattr(
+        pipeline_executor.coverage_analyzer,
+        "analyze_coverage",
+        spy,
+    )
+
+    result = execute_pipeline_stages(config, run_paths)
+    coverage_stage = next(
+        stage
+        for stage in result.stage_results
+        if stage.stage_name == "coverage_analyzer"
+    )
+
+    return seen, coverage_stage
+
+
+def test_executor_default_workers_is_sequential(tmp_path, monkeypatch):
+    seen, stage = _run_with_workers_spy(
+        tmp_path, monkeypatch, sols=(100, 101, 102, 103, 104, 105)
+    )
+
+    assert seen["workers"] == 1
+    assert stage.summary["parallelism"] == {
+        "workers_requested": 1,
+        "workers_used": 1,
+        "csv_files": 6,
+    }
+
+
+def test_executor_explicit_workers_are_clamped_to_file_count(
+    tmp_path, monkeypatch
+):
+    seen, stage = _run_with_workers_spy(
+        tmp_path, monkeypatch, sols=(100, 101), workers=4
+    )
+
+    assert seen["workers"] == 2
+    assert stage.summary["parallelism"]["workers_requested"] == 4
+    assert stage.summary["parallelism"]["workers_used"] == 2
+
+
+def test_executor_explicit_workers_used_when_enough_files(
+    tmp_path, monkeypatch
+):
+    seen, _ = _run_with_workers_spy(
+        tmp_path, monkeypatch, sols=tuple(range(100, 110)), workers=4
+    )
+
+    assert seen["workers"] == 4
+
+
+def test_executor_optimized_uses_choose_workers(tmp_path, monkeypatch):
+    sols = tuple(range(100, 112))
+
+    seen, stage = _run_with_workers_spy(
+        tmp_path, monkeypatch, sols=sols, workers="optimized"
+    )
+
+    expected = pipeline_executor.coverage_analyzer.choose_workers(
+        "optimized", len(sols)
+    )
+
+    assert seen["workers"] == expected
+    assert stage.summary["parallelism"]["workers_requested"] == "optimized"
+    assert stage.summary["parallelism"]["workers_used"] == expected
+
+
+def test_executor_optimized_with_few_files_stays_sequential(
+    tmp_path, monkeypatch
+):
+    seen, _ = _run_with_workers_spy(
+        tmp_path, monkeypatch, sols=(100, 101), workers="optimized"
+    )
+
+    assert seen["workers"] == 1

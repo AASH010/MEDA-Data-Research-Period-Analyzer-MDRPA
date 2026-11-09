@@ -1,4 +1,3 @@
-
 """High-level orchestration for one MEDA analysis run.
 
 This module coordinates configuration validation, Run lifecycle
@@ -106,6 +105,7 @@ class AnalysisPipeline:
             "weight_sync": config.weight_sync,
             "integrity_timestamps": config.integrity_timestamps,
             "integrity_values": config.integrity_values,
+            "workers": config.workers,
         }
 
     @staticmethod

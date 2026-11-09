@@ -68,6 +68,13 @@ class PipelineConfig:
     integrity_timestamps: float = 1.0
     integrity_values: float = 1.0
 
+    # Coverage Analyzer parallelism: an int >= 1, or "optimized"
+    # to let the analyzer choose from CPU count and file count.
+    workers: int | str = 1
+
+
+_OPTIMIZED_WORKERS = "optimized"
+_MAX_EXPLICIT_WORKERS = 64
 
 _ALLOWED_CONFIG_KEYS = frozenset(
     PipelineConfig.__dataclass_fields__.keys()
@@ -223,6 +230,36 @@ def _validate_required_products(
 
     # Preserve the first occurrence and the supplied order.
     return tuple(dict.fromkeys(normalized))
+
+
+def _validate_workers(value: Any) -> int | str:
+    """Validate the Coverage Analyzer worker setting."""
+
+    if isinstance(value, bool):
+        raise TypeError(
+            "workers must be an integer or 'optimized', not a boolean."
+        )
+
+    if isinstance(value, str):
+        if value.strip().casefold() != _OPTIMIZED_WORKERS:
+            raise ValueError(
+                "workers must be an integer >= 1 or 'optimized'."
+            )
+
+        return _OPTIMIZED_WORKERS
+
+    if not isinstance(value, int):
+        raise TypeError(
+            "workers must be an integer or 'optimized'."
+        )
+
+    if not 1 <= value <= _MAX_EXPLICIT_WORKERS:
+        raise ValueError(
+            "workers must be between 1 and "
+            f"{_MAX_EXPLICIT_WORKERS}, or 'optimized'."
+        )
+
+    return value
 
 
 def _build_config(
@@ -395,4 +432,5 @@ def validate_pipeline_config(
         integrity_values=float(
             validated.integrity_values
         ),
+        workers=_validate_workers(validated.workers),
     )

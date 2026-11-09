@@ -1,8 +1,8 @@
-
 """Application entry point and composition root for MDRPA."""
 
 from __future__ import annotations
 
+import multiprocessing
 import sys
 from collections.abc import Sequence
 
@@ -25,6 +25,7 @@ __all__ = [
     "create_application",
     "create_main_window",
     "main",
+    "run",
 ]
 
 
@@ -87,5 +88,23 @@ def main(
     return application.exec()
 
 
+def run() -> int:
+    """Program entry point: enable freeze support, then start the app.
+
+    multiprocessing.freeze_support() must be the very first thing a
+    frozen (PyInstaller) build executes, before any window is created;
+    otherwise every worker process spawned by the Coverage Analyzer would
+    start a new copy of the application. It does nothing when the
+    program runs from source.
+
+    If the PyInstaller .spec later points to a different launcher
+    script, call multiprocessing.freeze_support() at the top of that
+    script's ``__main__`` block as well.
+    """
+    multiprocessing.freeze_support()
+
+    return main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run())

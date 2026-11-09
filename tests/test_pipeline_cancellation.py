@@ -56,7 +56,7 @@ def _patch_successful_analyzers(monkeypatch):
     monkeypatch.setattr(
         pipeline_executor.coverage_analyzer,
         "analyze_coverage",
-        lambda input_dir, inventory, metadata, gap_factor: [
+        lambda input_dir, inventory, metadata, gap_factor, workers=1: [
             {"sol_number": 100},
         ],
     )
