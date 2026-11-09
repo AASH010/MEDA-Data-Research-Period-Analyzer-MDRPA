@@ -23,6 +23,10 @@ from backend.pipeline.pipeline_validator import (
     PipelineConfig,
     validate_pipeline_config,
 )
+from backend.run_manager.input_shortcut import (
+    create_source_input_shortcut,
+)
+
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_registry import RunRecord
 from backend.run_manager.run_status import RunStatus
@@ -294,7 +298,18 @@ class AnalysisPipeline:
             application_version=application_version,
         )
 
+        # A source shortcut is optional and must not interrupt the analysis.
+        try:
+            create_source_input_shortcut(
+                source_dir=validated_config.input_dir,
+                run_input_dir=record.paths.input_dir,
+            )
+        except Exception:
+            pass
+
         record = self.run_manager.start_run(record.run_id)
+
+        
 
         execution: PipelineExecutionResult | None = None
 
