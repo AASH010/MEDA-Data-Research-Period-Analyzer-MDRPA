@@ -42,3 +42,13 @@ input/*
 # Ignore everything inside performance except the test script.
 /performance/*
 !/performance/performance_test.py
+
+# Local user data - never upload personal data or analysis runs
+/user_data/runs/*
+!/user_data/runs/.gitkeep
+
+/user_data/logs/*
+!/user_data/logs/.gitkeep
+
+/user_data/settings/*
+!/user_data/settings/.gitkeep
