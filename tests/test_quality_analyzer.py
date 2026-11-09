@@ -1418,6 +1418,26 @@ def test_build_summary_counts_categories_separately():
             "notes": "Column mapping: header_exact_match.",
         },
         {
+            "analysis_status": "analysed",
+            "field_type": "special_constant_check",
+            "special_constant_count": 3,
+            "special_constant_counts_json": json.dumps({
+                "missing_constant": 2,
+                "invalid_constant": 1,
+            }),
+            "notes": "Column mapping: header_exact_match.",
+        },
+        {
+            "analysis_status": "analysed",
+            "field_type": "special_constant_check",
+            "special_constant_count": 4,
+            "special_constant_counts_json": json.dumps({
+                "missing_constant": 1,
+                "saturated_constant": 3,
+            }),
+            "notes": "Column mapping: header_exact_match.",
+        },
+        {
             "analysis_status": "metadata_not_found",
             "field_type": "file_status",
         },
@@ -1425,26 +1445,33 @@ def test_build_summary_counts_categories_separately():
 
     summary = qa.build_summary(rows)
 
-    assert summary["report_row_count"] == 5
-    assert summary["analysed_field_reports"] == 4
+    assert summary["report_row_count"] == 7
+    assert summary["analysed_field_reports"] == 6
 
     assert summary["quality_field_candidate_reports"] == 1
     assert summary["operational_context_flag_candidate_reports"] == 1
     assert summary["measurement_uncertainty_reports"] == 1
     assert summary["range_check_reports"] == 1
+    assert summary["special_constant_check_reports"] == 2
 
     assert summary["file_status_reports"] == 1
 
     assert summary["total_values_below_declared_minimum"] == 1
     assert summary["total_values_above_declared_maximum"] == 2
 
+    assert summary["total_special_constant_matches"] == 7
+    assert summary["special_constant_type_counts"] == {
+        "invalid_constant": 1,
+        "missing_constant": 3,
+        "saturated_constant": 3,
+    }
+
     assert summary["column_mapping_status_counts"] == {
-        "header_exact_match": 4,
+        "header_exact_match": 6,
     }
 
     assert "limitations" in summary
     assert isinstance(summary["limitations"], list)
-
 
 def test_save_summary_writes_valid_json(tmp_path):
     output_path = tmp_path / "reports" / "summary.json"
