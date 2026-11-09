@@ -150,7 +150,7 @@ class QualityDashboard(QWidget):
         for index, label in enumerate(metrics):
             metrics_layout.addWidget(label, index // 3, index % 3)
 
-        charts_layout = QHBoxLayout()
+        charts_layout = QVBoxLayout()
 
         category_group = QGroupBox("Persisted Report Categories", self)
         category_group.setObjectName("quality_category_group")
@@ -162,7 +162,7 @@ class QualityDashboard(QWidget):
         self.category_chart.setLabel("left", "Report Count")
         self.category_chart.setLabel("bottom", "Category")
         self.category_chart.showGrid(x=True, y=True, alpha=0.2)
-        self.category_chart.setMinimumHeight(230)
+        self.category_chart.setMinimumHeight(360)
 
         category_layout.addWidget(self.category_chart)
 

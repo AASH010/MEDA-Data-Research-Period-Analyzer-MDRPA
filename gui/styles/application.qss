@@ -114,3 +114,77 @@ QToolTip {
     border: 1px solid #70C1B3;
     padding: 5px;
 }
+/* Dashboard tabs */
+QTabWidget::pane {
+    background-color: #17232D;
+    border: 1px solid #344653;
+    border-radius: 6px;
+}
+
+QTabBar::tab {
+    background-color: #223744;
+    color: #C8D5DC;
+    padding: 9px 16px;
+    margin-right: 3px;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+}
+
+QTabBar::tab:selected {
+    background-color: #285D68;
+    color: #FFFFFF;
+}
+
+QTabBar::tab:hover {
+    background-color: #347887;
+}
+
+/* Scroll areas */
+QScrollArea,
+QScrollArea > QWidget > QWidget {
+    background-color: #17232D;
+    border: none;
+}
+
+/* Combo boxes */
+QComboBox QAbstractItemView {
+    background-color: #14212B;
+    color: #E8EEF2;
+    selection-background-color: #285D68;
+    selection-color: #FFFFFF;
+    border: 1px solid #405563;
+}
+
+/* Radio buttons */
+QRadioButton {
+    background: transparent;
+    color: #E8EEF2;
+    spacing: 8px;
+    padding: 4px;
+}
+
+QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+}
+
+QRadioButton::indicator:checked {
+    background-color: #70C1B3;
+    border: 2px solid #70C1B3;
+    border-radius: 8px;
+}
+
+QRadioButton::indicator:unchecked {
+    background-color: #14212B;
+    border: 2px solid #607782;
+    border-radius: 8px;
+}
+
+/* Numeric inputs */
+QDoubleSpinBox {
+    background-color: #14212B;
+    color: #E8EEF2;
+    border: 1px solid #405563;
+    border-radius: 5px;
+    padding: 6px;
+}

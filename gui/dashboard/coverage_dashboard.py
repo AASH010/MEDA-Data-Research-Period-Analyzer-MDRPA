@@ -123,7 +123,7 @@ class CoverageDashboard(QWidget):
         self.chart.setLabel("left", "SOL Count")
         self.chart.setLabel("bottom", "Product")
         self.chart.showGrid(x=True, y=True, alpha=0.2)
-        self.chart.setMinimumHeight(240)
+        self.chart.setMinimumHeight(360)
 
         chart_layout.addWidget(self.chart)
 

@@ -200,7 +200,7 @@ class SynchronizationDashboard(QWidget):
         for index, label in enumerate(metrics):
             metrics_layout.addWidget(label, index // 3, index % 3)
 
-        charts_layout = QHBoxLayout()
+        charts_layout = QVBoxLayout()
 
         file_group = QGroupBox("File Analysis Statuses", self)
         file_group.setObjectName("synchronization_file_chart_group")
@@ -214,7 +214,7 @@ class SynchronizationDashboard(QWidget):
         self.file_status_chart.setLabel("left", "File Count")
         self.file_status_chart.setLabel("bottom", "Analysis Status")
         self.file_status_chart.showGrid(x=True, y=True, alpha=0.2)
-        self.file_status_chart.setMinimumHeight(230)
+        self.file_status_chart.setMinimumHeight(360)
         file_layout.addWidget(self.file_status_chart)
 
         pair_group = QGroupBox("Product Comparison Statuses", self)
@@ -229,7 +229,7 @@ class SynchronizationDashboard(QWidget):
         self.pair_status_chart.setLabel("left", "Pair Count")
         self.pair_status_chart.setLabel("bottom", "Comparison Status")
         self.pair_status_chart.showGrid(x=True, y=True, alpha=0.2)
-        self.pair_status_chart.setMinimumHeight(230)
+        self.pair_status_chart.setMinimumHeight(360)
         pair_layout.addWidget(self.pair_status_chart)
 
         charts_layout.addWidget(file_group)
@@ -248,7 +248,7 @@ class SynchronizationDashboard(QWidget):
         self.match_rate_chart.setLabel("bottom", "Product Pair")
         self.match_rate_chart.setYRange(0, 100, padding=0)
         self.match_rate_chart.showGrid(x=True, y=True, alpha=0.2)
-        self.match_rate_chart.setMinimumHeight(240)
+        self.match_rate_chart.setMinimumHeight(360)
         rates_layout.addWidget(self.match_rate_chart)
 
         file_table_group = QGroupBox("File Analysis Details", self)

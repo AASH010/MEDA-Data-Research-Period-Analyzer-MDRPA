@@ -182,7 +182,7 @@ class RankingDashboard(QWidget):
         self.score_chart.setLabel("bottom", "Comparison Group / Window")
         self.score_chart.setYRange(0, 100, padding=0)
         self.score_chart.showGrid(x=True, y=True, alpha=0.2)
-        self.score_chart.setMinimumHeight(260)
+        self.score_chart.setMinimumHeight(360)
 
         score_layout.addWidget(self.score_chart)
 
@@ -196,7 +196,7 @@ class RankingDashboard(QWidget):
         self.status_chart.setLabel("left", "Window Count")
         self.status_chart.setLabel("bottom", "Ranking Status")
         self.status_chart.showGrid(x=True, y=True, alpha=0.2)
-        self.status_chart.setMinimumHeight(220)
+        self.status_chart.setMinimumHeight(360)
 
         status_layout.addWidget(self.status_chart)
 

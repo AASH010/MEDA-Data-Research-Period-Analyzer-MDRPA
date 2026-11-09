@@ -13,13 +13,14 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QPlainTextEdit,
+    QScrollArea,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
-from gui.styles.classic_theme import apply_dashboard_theme
+
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_registry import RunRecord
 from gui.dashboard.comparison_dashboard import ComparisonDashboard
@@ -29,6 +30,7 @@ from gui.dashboard.ranking_dashboard import RankingDashboard
 from gui.dashboard.synchronization_dashboard import (
     SynchronizationDashboard,
 )
+from gui.styles.classic_theme import apply_dashboard_theme
 
 
 __all__ = ["DashboardView"]
@@ -122,6 +124,27 @@ class DashboardView(QWidget):
         """Return the Full Dataset ranking dashboard."""
         return self._ranking_dashboard
 
+    @staticmethod
+    def _make_scrollable_tab(
+        dashboard: QWidget,
+        parent: QWidget,
+        title: str,
+        tabs: QTabWidget,
+    ) -> None:
+        """Place a dashboard inside a resizable scroll area."""
+        scroll = QScrollArea(parent)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        scroll.setWidget(dashboard)
+
+        tabs.addTab(scroll, title)
+
     def _create_analysis_page(
         self,
         parent: QWidget,
@@ -141,15 +164,35 @@ class DashboardView(QWidget):
         tabs = QTabWidget(page)
         tabs.setObjectName("dashboard_analyzer_tabs")
 
-        coverage = CoverageDashboard(tabs)
-        quality = QualityDashboard(tabs)
-        synchronization = SynchronizationDashboard(tabs)
-        ranking = RankingDashboard(tabs)
+        coverage = CoverageDashboard()
+        quality = QualityDashboard()
+        synchronization = SynchronizationDashboard()
+        ranking = RankingDashboard()
 
-        tabs.addTab(coverage, "Coverage")
-        tabs.addTab(quality, "Quality")
-        tabs.addTab(synchronization, "Synchronization")
-        tabs.addTab(ranking, "Ranking")
+        self._make_scrollable_tab(
+            coverage,
+            page,
+            "Coverage",
+            tabs,
+        )
+        self._make_scrollable_tab(
+            quality,
+            page,
+            "Quality",
+            tabs,
+        )
+        self._make_scrollable_tab(
+            synchronization,
+            page,
+            "Synchronization",
+            tabs,
+        )
+        self._make_scrollable_tab(
+            ranking,
+            page,
+            "Ranking",
+            tabs,
+        )
 
         layout.addWidget(tabs)
 
@@ -175,6 +218,8 @@ class DashboardView(QWidget):
 
         runs_group = QGroupBox("Analysis Runs", self)
         runs_group.setObjectName("dashboard_runs_group")
+        runs_group.setMaximumHeight(220)
+
         runs_layout = QVBoxLayout(runs_group)
 
         self.run_table = QTableWidget(0, 4, runs_group)
@@ -194,10 +239,12 @@ class DashboardView(QWidget):
         self.run_table.setAlternatingRowColors(True)
         self.run_table.setWordWrap(False)
         self.run_table.horizontalHeader().setStretchLastSection(True)
+
         runs_layout.addWidget(self.run_table)
 
         details_group = QGroupBox("Selected Run Details", self)
         details_group.setObjectName("dashboard_details_group")
+
         details_layout = QVBoxLayout(details_group)
 
         self.run_details_label = QLabel("No Run selected.")
@@ -265,8 +312,8 @@ class DashboardView(QWidget):
 
         layout.addWidget(title)
         layout.addWidget(self.status_label)
-        layout.addWidget(runs_group, 2)
-        layout.addWidget(self.details_tabs, 3)
+        layout.addWidget(runs_group, 0)
+        layout.addWidget(self.details_tabs, 1)
 
     def _connect_signals(self) -> None:
         self.run_table.itemSelectionChanged.connect(
@@ -423,13 +470,11 @@ class DashboardView(QWidget):
         if selected_row is None:
             selected_row = 0
 
-
         self.run_table.blockSignals(True)
         self.run_table.selectRow(selected_row)
         self.run_table.blockSignals(False)
 
         self._display_selected_run()
-
 
     def _handle_selection_changed(self) -> None:
         self._display_selected_run()

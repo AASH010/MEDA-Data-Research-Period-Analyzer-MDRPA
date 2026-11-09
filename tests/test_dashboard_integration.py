@@ -462,11 +462,10 @@ def test_dashboard_exposes_all_analysis_visualization_tabs(
     assert analyzer_tabs.tabText(2) == "Synchronization"
     assert analyzer_tabs.tabText(3) == "Ranking"
 
-    assert analyzer_tabs.widget(0) is dashboard.coverage_dashboard
-    assert analyzer_tabs.widget(1) is dashboard.quality_dashboard
-    assert analyzer_tabs.widget(2) is dashboard.synchronization_dashboard
-    assert analyzer_tabs.widget(3) is dashboard.ranking_dashboard
-
+    assert analyzer_tabs.widget(0).widget() is dashboard.coverage_dashboard
+    assert analyzer_tabs.widget(1).widget() is dashboard.quality_dashboard
+    assert analyzer_tabs.widget(2).widget() is dashboard.synchronization_dashboard
+    assert analyzer_tabs.widget(3).widget() is dashboard.ranking_dashboard
 
 def test_dashboard_loads_selected_run_artifacts_into_all_visualizations(
     main_window,
