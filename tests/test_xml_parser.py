@@ -807,6 +807,45 @@ def test_discover_xml_files_delegates_to_discover_files(
 # Metadata Inventory
 # --------------------------------------------------
 
+def test_parse_xml_extracts_fields_and_arrays_separately(tmp_path):
+    xml_path = create_xml(
+        tmp_path / "SOL100" / "sample.xml",
+        """
+        <Product>
+            <Table_Character>
+                <Field_Delimited>
+                    <name>temperature</name>
+                    <data_type>ASCII_Real</data_type>
+                </Field_Delimited>
+            </Table_Character>
+
+            <Array_2D>
+                <axes>2</axes>
+                <elements>100</elements>
+                <element_data_type>ASCII_Real</element_data_type>
+                <Special_Constants>
+                    <missing_constant>-999</missing_constant>
+                </Special_Constants>
+            </Array_2D>
+        </Product>
+        """,
+    )
+
+    record = xml_parser.parse_xml_file(xml_path)
+
+    assert record["parse_status"] == "success"
+
+    assert record["field_count"] == 1
+    assert record["array_count"] == 1
+
+    assert record["fields"][0]["name"] == "temperature"
+
+    assert record["arrays"][0]["xml_element_type"] == "Array_2D"
+
+    assert record["arrays"][0]["special_constants"] == [
+        {"missing_constant": "-999"}
+    ]
+
 def test_build_metadata_inventory(tmp_path):
     create_xml(
         tmp_path / "SOL100" / "sample.xml",
@@ -937,3 +976,121 @@ def test_save_json_writes_valid_json(tmp_path):
     assert json.loads(
         output_file.read_text(encoding="utf-8")
     ) == data
+
+# --------------------------------------------------
+# Array Metadata Extraction
+# --------------------------------------------------
+
+def test_extract_array_metadata():
+    root = ET.fromstring(
+        """
+        <Product>
+            <Array_2D>
+                <axes>2</axes>
+                <axis_index_order>Last Index Fastest</axis_index_order>
+                <elements>100</elements>
+                <element_data_type>IEEE754LSBSingle</element_data_type>
+                <Special_Constants>
+                    <missing_constant>-999</missing_constant>
+                    <invalid_constant>-998</invalid_constant>
+                </Special_Constants>
+            </Array_2D>
+        </Product>
+        """
+    )
+
+    arrays = xml_parser.extract_array_metadata(root)
+
+    assert len(arrays) == 1
+
+    array = arrays[0]
+
+    assert array["xml_element_type"] == "Array_2D"
+    assert array["axes"] == "2"
+    assert array["elements"] == "100"
+    assert array["element_data_type"] == "IEEE754LSBSingle"
+
+    assert array["special_constants"] == [
+        {
+            "missing_constant": "-999",
+            "invalid_constant": "-998",
+        }
+    ]
+
+
+def test_extract_array_metadata_supports_namespace():
+    root = ET.fromstring(
+        """
+        <Product xmlns="http://example.com">
+            <Array_1D>
+                <axes>1</axes>
+                <elements>50</elements>
+                <element_data_type>ASCII_Real</element_data_type>
+            </Array_1D>
+        </Product>
+        """
+    )
+
+    arrays = xml_parser.extract_array_metadata(root)
+
+    assert len(arrays) == 1
+    assert arrays[0]["xml_element_type"] == "Array_1D"
+    assert arrays[0]["axes"] == "1"
+
+
+def test_extract_array_metadata_preserves_special_constant_attributes():
+    root = ET.fromstring(
+        """
+        <Product>
+            <Array>
+                <Special_Constants source="PDS4">
+                    <missing_constant>-999.0</missing_constant>
+                </Special_Constants>
+            </Array>
+        </Product>
+        """
+    )
+
+    arrays = xml_parser.extract_array_metadata(root)
+
+    assert arrays[0]["special_constants"] == [
+        {
+            "@source": "PDS4",
+            "missing_constant": "-999.0",
+        }
+    ]
+
+
+def test_extract_array_metadata_omits_absent_optional_values():
+    root = ET.fromstring(
+        """
+        <Product>
+            <Array_3D>
+                <axes>3</axes>
+            </Array_3D>
+        </Product>
+        """
+    )
+
+    arrays = xml_parser.extract_array_metadata(root)
+
+    assert arrays == [
+        {
+            "xml_element_type": "Array_3D",
+            "axes": "3",
+        }
+    ]
+
+
+def test_extract_array_metadata_returns_empty_list_without_arrays():
+    root = ET.fromstring(
+        """
+        <Product>
+            <Field_Delimited>
+                <name>temperature</name>
+            </Field_Delimited>
+        </Product>
+        """
+    )
+
+    assert xml_parser.extract_array_metadata(root) == []

@@ -30,12 +30,30 @@ except ImportError:
     from meda_common import validate_field_metadata
 
 
+# --------------------------------------------------
+# PDS4 Element Definitions
+# --------------------------------------------------
+
 FIELD_TAGS = {
     "field_delimited",
     "field_character",
     "field_binary",
     "field_bit",
 }
+
+ARRAY_TAGS = {
+    "array",
+    "array_1d",
+    "array_2d",
+    "array_2d_image",
+    "array_2d_map",
+    "array_2d_spectrum",
+    "array_3d",
+    "array_3d_image",
+    "array_3d_movie",
+    "array_3d_spectrum",
+}
+
 
 QUALITY_KEYWORDS = re.compile(
     r"\b(quality|qual|flag|status|validity|confidence)\b",
@@ -170,6 +188,20 @@ def find_first_text(
     return None
 
 
+def extract_special_constants(element: ET.Element) -> list[dict]:
+    """
+    Extract direct Special_Constants children.
+
+    Values and attributes are preserved as represented in XML.
+    No scientific interpretation or numeric conversion is performed.
+    """
+    return [
+        element_to_dict(child)
+        for child in element
+        if local_name(child.tag).lower() == "special_constants"
+    ]
+
+
 # --------------------------------------------------
 # File and Product Identification
 # --------------------------------------------------
@@ -251,7 +283,7 @@ def find_matching_csv_path(xml_path: Path) -> str | None:
 
 
 # --------------------------------------------------
-# Metadata Extraction
+# Field Metadata Extraction
 # --------------------------------------------------
 
 def extract_field_metadata(root: ET.Element) -> list[dict]:
@@ -269,11 +301,7 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
         if tag.lower() not in FIELD_TAGS:
             continue
 
-        special_constants = [
-            child
-            for child in element
-            if local_name(child.tag).lower() == "special_constants"
-        ]
+        special_constants = extract_special_constants(element)
 
         def extract_limit(name: str) -> str | None:
             direct_value = find_direct_child_text(element, name)
@@ -281,7 +309,12 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
             if direct_value is not None:
                 return direct_value
 
-            for special in special_constants:
+            for special in (
+                child
+                for child in element
+                if local_name(child.tag).lower()
+                == "special_constants"
+            ):
                 value = find_direct_child_text(special, name)
 
                 if value is not None:
@@ -323,10 +356,7 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
             ),
             "valid_minimum": extract_limit("valid_minimum"),
             "valid_maximum": extract_limit("valid_maximum"),
-            "special_constants": [
-                element_to_dict(special)
-                for special in special_constants
-            ],
+            "special_constants": special_constants,
         }
 
         # Remove absent optional metadata.
@@ -339,6 +369,63 @@ def extract_field_metadata(root: ET.Element) -> list[dict]:
         fields.append(field)
 
     return fields
+
+
+# --------------------------------------------------
+# Array Metadata Extraction
+# --------------------------------------------------
+
+def extract_array_metadata(root: ET.Element) -> list[dict]:
+    """
+    Extract PDS4 Array definitions.
+
+    Array metadata is kept separate from Field metadata.
+    Special_Constants are preserved without interpretation.
+    """
+    arrays = []
+
+    for element in root.iter():
+        tag = local_name(element.tag)
+
+        if tag.lower() not in ARRAY_TAGS:
+            continue
+
+        array = {
+            "xml_element_type": tag,
+            "axes": find_direct_child_text(element, "axes"),
+            "axis_index_order": find_direct_child_text(
+                element,
+                "axis_index_order",
+            ),
+            "elements": find_direct_child_text(
+                element,
+                "elements",
+            ),
+            "element_data_type": find_direct_child_text(
+                element,
+                "element_data_type",
+            ),
+            "scaling_factor": find_direct_child_text(
+                element,
+                "scaling_factor",
+            ),
+            "value_offset": find_direct_child_text(
+                element,
+                "value_offset",
+            ),
+            "special_constants": extract_special_constants(element),
+        }
+
+        # Remove absent optional metadata.
+        array = {
+            key: value
+            for key, value in array.items()
+            if value is not None and value != []
+        }
+
+        arrays.append(array)
+
+    return arrays
 
 
 # --------------------------------------------------
@@ -547,6 +634,9 @@ def parse_xml_file(
         "field_count": 0,
         "fields": [],
 
+        "array_count": 0,
+        "arrays": [],
+
         "metadata_warnings": [],
 
         # Header presence is not inferred from a generic XML Header element.
@@ -568,12 +658,16 @@ def parse_xml_file(
         root = tree.getroot()
 
         fields = extract_field_metadata(root)
+        arrays = extract_array_metadata(root)
 
         record["product_metadata"] = extract_product_metadata(root)
         record["table_metadata"] = extract_table_metadata(root)
 
         record["field_count"] = len(fields)
         record["fields"] = fields
+
+        record["array_count"] = len(arrays)
+        record["arrays"] = arrays
 
         # Structural validation only.
         # No scientific interpretation or automatic correction.
