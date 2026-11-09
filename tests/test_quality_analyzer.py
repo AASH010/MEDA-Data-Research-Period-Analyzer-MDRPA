@@ -704,6 +704,148 @@ def test_select_field_categories_keeps_categories_separate():
     assert ["range_check"] in categories
 
 
+def test_get_special_constants_extracts_documented_values():
+    field = {
+        "name": "Temperature",
+        "valid_minimum": "-100",
+        "valid_maximum": "100",
+        "special_constants": [
+            {
+                "missing_constant": "-999",
+                "invalid_constant": "-998",
+                "valid_minimum": "-100",
+                "valid_maximum": "100",
+            }
+        ],
+    }
+
+    result = qa.get_special_constants(field)
+
+    assert result == {
+        "missing_constant": {"-999"},
+        "invalid_constant": {"-998"},
+    }
+
+
+def test_get_special_constants_supports_repeated_values():
+    field = {
+        "special_constants": [
+            {
+                "missing_constant": ["-999", "-998"],
+            }
+        ],
+    }
+
+    assert qa.get_special_constants(field) == {
+        "missing_constant": {"-999", "-998"},
+    }
+
+
+def test_special_constants_select_field_category():
+    fields = [
+        {
+            "name": "Temperature",
+            "special_constants": [
+                {"missing_constant": "-999"}
+            ],
+        }
+    ]
+
+    selected = qa.select_field_categories(fields)
+
+    assert len(selected) == 1
+    assert selected[0][2] == ["special_constant_check"]
+
+
+def test_update_field_stats_separates_special_constants():
+    field = {
+        "name": "Temperature",
+        "special_constants": [
+            {
+                "missing_constant": "-999",
+                "invalid_constant": "-998",
+            }
+        ],
+    }
+
+    stats = qa.new_field_stats(
+        field,
+        "special_constant_check",
+    )
+
+    qa.update_field_stats(stats, "-999")
+    qa.update_field_stats(stats, "-998")
+    qa.update_field_stats(stats, "")
+    qa.update_field_stats(stats, "12.5")
+    qa.update_field_stats(stats, "unknown")
+
+    assert stats["total_rows"] == 5
+    assert stats["missing_count"] == 1
+    assert stats["numeric_count"] == 1
+    assert stats["non_numeric_count"] == 1
+
+    assert stats["special_constant_counts"] == {
+        "missing_constant": 1,
+        "invalid_constant": 1,
+    }
+
+
+def test_special_constant_report_is_generated(tmp_path):
+    csv_path = tmp_path / "sample.csv"
+
+    write_csv(
+        csv_path,
+        [
+            ["Temperature"],
+            ["-999"],
+            ["12.5"],
+            ["unknown"],
+            [""],
+        ],
+    )
+
+    xml_record = make_xml_record(
+        fields=[
+            {
+                "name": "Temperature",
+                "data_type": "ASCII_Real",
+                "special_constants": [
+                    {
+                        "missing_constant": "-999",
+                    }
+                ],
+            }
+        ],
+    )
+
+    reports = qa.analyze_csv(
+        csv_path,
+        make_inventory_row(),
+        xml_record,
+        "matched_by_relative_path",
+    )
+
+    assert len(reports) == 1
+
+    report = reports[0]
+
+    assert report["field_type"] == "special_constant_check"
+    assert report["analysis_status"] == "analysed"
+
+    assert report["special_constant_count"] == 1
+
+    assert json.loads(
+        report["special_constant_counts_json"]
+    ) == {
+        "missing_constant": 1,
+    }
+
+    assert report["missing_count"] == 1
+    assert report["numeric_count"] == 1
+    assert report["non_numeric_count"] == 1
+
+
+
 # --------------------------------------------------
 # CSV column mapping
 # --------------------------------------------------

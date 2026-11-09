@@ -102,6 +102,8 @@ REPORT_COLUMNS = [
     "non_empty_count",
     "numeric_count",
     "non_numeric_count",
+    "special_constant_count",
+    "special_constant_counts_json",
     "distinct_values_lower_bound",
     "distinct_count_capped",
     "below_valid_minimum",
@@ -151,7 +153,19 @@ def is_missing(value: Any) -> bool:
     if value is None:
         return True
 
-    return str(value).strip().casefold() in MISSING_TEXT
+    text = str(value).strip().casefold()
+
+    if not text:
+        return True
+
+    # Common missing-value representations.
+    if text in MISSING_TEXT:
+        return True
+
+    if text in {"n/a", "na", "nan", "null", "none"}:
+        return True
+
+    return False
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -195,7 +209,7 @@ def get_product_code(filename: str) -> str:
     with the current quality report schema.
     """
     match = re.search(
-        r"(?:^|_)CAL_([A-Z0-9]+)(?:_|\.|$)",
+        r"(?:^|_)CAL_([A-Z0-9]+)(?:_|\.)",
         str(filename or ""),
         re.IGNORECASE,
     )
@@ -257,7 +271,6 @@ class BoundedValueCounter:
     Space-Saving frequency tracker.
 
     Memory is bounded by the configured capacity.
-
     Top-value counts are approximate if capacity is reached.
     Distinct count is a lower bound when distinct tracking is capped.
     """
@@ -742,6 +755,73 @@ def field_has_range(field: dict) -> bool:
     )
 
 
+# --------------------------------------------------
+# Special Constants
+# --------------------------------------------------
+
+def get_special_constants(field: dict) -> dict[str, set[str]]:
+    """
+    Extract explicitly documented Special_Constants from XML metadata.
+
+    Only metadata keys ending with '_constant' are considered.
+    Values are matched using exact trimmed text.
+
+    No numeric equivalence or scientific interpretation is applied.
+    """
+    result: dict[str, set[str]] = {}
+
+    raw_blocks = field.get("special_constants", [])
+
+    if isinstance(raw_blocks, dict):
+        raw_blocks = [raw_blocks]
+
+    if not isinstance(raw_blocks, list):
+        return result
+
+    def extract_text(value: Any) -> list[str]:
+        if isinstance(value, list):
+            values = []
+
+            for item in value:
+                values.extend(extract_text(item))
+
+            return values
+
+        if isinstance(value, dict):
+            return extract_text(value.get("#text"))
+
+        if value is None:
+            return []
+
+        text = str(value).strip()
+
+        return [text] if text else []
+
+    for block in raw_blocks:
+        if not isinstance(block, dict):
+            continue
+
+        for name, raw_value in block.items():
+            constant_type = str(name).casefold()
+
+            if not constant_type.endswith("_constant"):
+                continue
+
+            values = extract_text(raw_value)
+
+            if values:
+                result.setdefault(
+                    constant_type,
+                    set(),
+                ).update(values)
+
+    return result
+
+
+def field_has_special_constants(field: dict) -> bool:
+    return bool(get_special_constants(field))
+
+
 def select_field_categories(
     fields: list[dict],
 ) -> list[tuple[int, dict, list[str]]]:
@@ -769,6 +849,9 @@ def select_field_categories(
 
         if field_has_range(field):
             categories.append("range_check")
+
+        if field_has_special_constants(field):
+            categories.append("special_constant_check")
 
         if categories:
             selected.append(
@@ -1014,6 +1097,8 @@ def new_field_stats(
         "minimum": minimum,
         "maximum": maximum,
         "value_counter": BoundedValueCounter(),
+        "special_constants": get_special_constants(field),
+        "special_constant_counts": Counter(),
     }
 
 
@@ -1021,13 +1106,68 @@ def update_field_stats(
     stats: dict,
     raw_value: str | None,
 ) -> None:
+    """
+    Update field statistics while keeping documented Special Constants
+    separate from generic missing and ordinary non-numeric values.
+
+    A uniquely matched ``missing_constant`` contributes to both the
+    Special Constant counters and ``missing_count``. Generic missing
+    tokens do not contribute to ``non_empty_count`` or value frequencies.
+    """
     stats["total_rows"] += 1
 
-    if is_missing(raw_value):
+    if raw_value is None:
         stats["missing_count"] += 1
         return
 
     text_value = str(raw_value).strip()
+
+    if not text_value:
+        # Preserve the current project rule:
+        # empty values are ignored for fields with documented
+        # Special Constants, but counted as missing otherwise.
+        if not stats["special_constants"]:
+            stats["missing_count"] += 1
+        return
+
+    # Match documented Special Constants before generic missing checks.
+    # This allows explicitly documented non-missing constants (if any)
+    # to retain their metadata-defined category.
+    special_constants = stats["special_constants"]
+
+    matched_types = [
+        constant_type
+        for constant_type, documented_values
+        in special_constants.items()
+        if text_value in documented_values
+    ]
+
+    if len(matched_types) == 1:
+        constant_type = matched_types[0]
+        stats["special_constant_counts"][constant_type] += 1
+
+        if constant_type == "missing_constant":
+            stats["missing_count"] += 1
+            return
+
+        stats["non_empty_count"] += 1
+        stats["value_counter"].add(text_value)
+        return
+
+    if len(matched_types) > 1:
+        # Do not arbitrarily assign one type when metadata overlaps.
+        stats["special_constant_counts"][
+            "ambiguous_special_constant_match"
+        ] += 1
+        stats["non_empty_count"] += 1
+        stats["value_counter"].add(text_value)
+        return
+
+    # Generic missing tokens (for example N/A) are missing values,
+    # not non-empty or non-numeric observations.
+    if is_missing(text_value):
+        stats["missing_count"] += 1
+        return
 
     stats["non_empty_count"] += 1
     stats["value_counter"].add(text_value)
@@ -1108,6 +1248,8 @@ def make_report_row(
         "non_empty_count": 0,
         "numeric_count": 0,
         "non_numeric_count": 0,
+        "special_constant_count": 0,
+        "special_constant_counts_json": "{}",
         "distinct_values_lower_bound": 0,
         "distinct_count_capped": False,
         "below_valid_minimum": 0,
@@ -1122,6 +1264,7 @@ def make_report_row(
         return row
 
     counter = stats["value_counter"]
+    special_counts = stats["special_constant_counts"]
 
     row.update({
         "total_rows": stats["total_rows"],
@@ -1129,6 +1272,11 @@ def make_report_row(
         "non_empty_count": stats["non_empty_count"],
         "numeric_count": stats["numeric_count"],
         "non_numeric_count": stats["non_numeric_count"],
+        "special_constant_count": sum(special_counts.values()),
+        "special_constant_counts_json": json.dumps(
+            dict(sorted(special_counts.items())),
+            ensure_ascii=False,
+        ),
         "distinct_values_lower_bound": (
             counter.distinct_lower_bound()
         ),
@@ -1209,8 +1357,8 @@ def analyze_csv(
                 "file_status",
                 "no_target_fields",
                 (
-                    "No candidate fields or XML-declared "
-                    "valid ranges were found."
+                    "No candidate fields, XML-declared valid ranges, "
+                    "or Special Constants were found."
                 ),
             )
         ]
@@ -1350,6 +1498,23 @@ def analyze_csv(
                         "Uncertainty-related field candidate; "
                         "values are reported without reinterpretation."
                     )
+
+                elif category == "special_constant_check":
+                    notes.append(
+                        "Special Constants are matched against explicitly "
+                        "documented XML values using exact trimmed text. "
+                        "No scientific meaning is inferred."
+                    )
+
+                    if stats["special_constant_counts"].get(
+                        "ambiguous_special_constant_match",
+                        0,
+                    ):
+                        notes.append(
+                            "Some values matched multiple documented "
+                            "Special Constant types and were recorded "
+                            "as ambiguous."
+                        )
 
                 if stats["value_counter"].distinct_tracking_capped:
                     notes.append(
@@ -1584,6 +1749,12 @@ def build_summary(
         if row.get("field_type") == "range_check"
     ]
 
+    special_constant_rows = [
+        row
+        for row in analysed
+        if row.get("field_type") == "special_constant_check"
+    ]
+
     statuses = Counter(
         row.get("analysis_status", "unknown")
         for row in rows
@@ -1601,6 +1772,29 @@ def build_summary(
 
         if match:
             mapping_statuses[match.group(1)] += 1
+
+    total_special_constants = sum(
+        safe_int(row.get("special_constant_count"))
+        for row in special_constant_rows
+    )
+
+    special_constant_type_counts = Counter()
+
+    for row in special_constant_rows:
+        raw_counts = row.get("special_constant_counts_json")
+
+        try:
+            parsed_counts = json.loads(raw_counts or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed_counts = {}
+
+        if not isinstance(parsed_counts, dict):
+            continue
+
+        for constant_type, count in parsed_counts.items():
+            special_constant_type_counts[str(constant_type)] += (
+                safe_int(count)
+            )
 
     return {
         "analyzer": "MEDA Quality Analyzer",
@@ -1629,6 +1823,18 @@ def build_summary(
         ),
 
         "range_check_reports": len(range_rows),
+
+        "special_constant_check_reports": (
+            len(special_constant_rows)
+        ),
+
+        "total_special_constant_matches": (
+            total_special_constants
+        ),
+
+        "special_constant_type_counts": dict(
+            sorted(special_constant_type_counts.items())
+        ),
 
         "file_status_reports": sum(
             row.get("field_type") == "file_status"
@@ -1679,8 +1885,16 @@ def build_summary(
                 "not automatically classified as scientifically invalid."
             ),
             (
-                "Special constants are not automatically treated "
-                "as missing values."
+                "Special Constants are matched only against explicitly "
+                "documented XML values using exact trimmed text."
+            ),
+            (
+                "Special Constant matches are kept separate from blank "
+                "or generic missing values and non-numeric values."
+            ),
+            (
+                "When one value matches multiple documented Special "
+                "Constant types, it is recorded as an ambiguous match."
             ),
             (
                 "A field may appear in more than one report category "
@@ -1738,7 +1952,7 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Analyze MEDA quality-related candidates, "
             "operational/context fields, uncertainty fields, "
-            "and XML-declared measurement ranges."
+            "XML-declared measurement ranges, and Special Constants."
         )
     )
 
@@ -1786,7 +2000,8 @@ def main() -> None:
 
     print(
         "Analyzing quality candidates, operational/context "
-        "fields, uncertainty fields and documented ranges..."
+        "fields, uncertainty fields, documented ranges "
+        "and Special Constants..."
     )
 
     reports = run_analysis(
@@ -1842,6 +2057,16 @@ def main() -> None:
     print(
         "Range check reports: "
         f"{summary['range_check_reports']}"
+    )
+
+    print(
+        "Special Constant check reports: "
+        f"{summary['special_constant_check_reports']}"
+    )
+
+    print(
+        "Special Constant matches: "
+        f"{summary['total_special_constant_matches']}"
     )
 
     print(
