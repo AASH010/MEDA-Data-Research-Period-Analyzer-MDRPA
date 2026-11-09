@@ -68,16 +68,16 @@ def test_create_main_window_uses_supplied_paths(tmp_path):
     window.close()
 
 
-def test_create_main_window_resolves_system_paths(
+def test_create_main_window_resolves_project_paths(
     tmp_path,
     monkeypatch,
 ):
-    paths = AppPaths.from_root(tmp_path / "system-data")
+    paths = AppPaths.from_root(tmp_path / "project-user-data")
 
     monkeypatch.setattr(
         AppPaths,
-        "from_system",
-        classmethod(lambda cls: paths),
+        "from_project_root",
+        classmethod(lambda cls, project_root=None: paths),
     )
 
     window = create_main_window()

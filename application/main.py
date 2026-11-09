@@ -61,6 +61,7 @@ def create_main_window(
 
     run_manager = RunManager(
         runs_root=resolved_paths.runs_dir,
+        logs_root=resolved_paths.logs_dir,
     )
     pipeline = AnalysisPipeline(run_manager)
 

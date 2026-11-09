@@ -26,7 +26,7 @@ from backend.pipeline.pipeline_validator import (
 from backend.run_manager.input_shortcut import (
     create_source_input_shortcut,
 )
-
+from backend.run_manager.run_logger import RunLogger
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_registry import RunRecord
 from backend.run_manager.run_status import RunStatus
@@ -222,6 +222,96 @@ class AnalysisPipeline:
                 f"{name} must be callable or None."
             )
 
+    @staticmethod
+    def _safe_log(
+        logger: RunLogger | None,
+        level: str,
+        message: str,
+        *,
+        timestamp: str | None = None,
+    ) -> None:
+        """Write a log event without allowing logging errors to stop analysis."""
+        if logger is None:
+            return
+
+        try:
+            if timestamp is None:
+                logger.log(level, message)
+            else:
+                logger.log(
+                    level,
+                    message,
+                    timestamp=timestamp,
+                )
+        except Exception:
+            # Logging is operational support and must not interrupt
+            # the scientific analysis pipeline.
+            pass
+
+    @classmethod
+    def _log_execution(
+        cls,
+        logger: RunLogger | None,
+        execution: PipelineExecutionResult,
+    ) -> None:
+        """Write stage events in chronological order."""
+        if logger is None:
+            return
+
+        events: list[tuple[str, int, str, str]] = []
+
+        for stage in execution.stage_results:
+            events.append((
+                stage.started_at,
+                0,
+                "INFO",
+                f"Stage started: {stage.stage_name}",
+            ))
+
+            events.append((
+                stage.finished_at,
+                1,
+                "INFO",
+                (
+                    f"Stage finished: {stage.stage_name} "
+                    f"| status={stage.status}"
+                ),
+            ))
+
+            for warning in stage.warnings:
+                events.append((
+                    stage.finished_at,
+                    2,
+                    "WARNING",
+                    f"{stage.stage_name}: {warning}",
+                ))
+
+            for error in stage.errors:
+                events.append((
+                    stage.finished_at,
+                    3,
+                    "ERROR",
+                    f"{stage.stage_name}: {error}",
+                ))
+
+        # Executor timestamps are UTC ISO-8601 strings.
+        # The secondary sequence preserves deterministic ordering
+        # for events sharing the same timestamp.
+        events.sort(
+            key=lambda event: (
+                event[0],
+                event[1],
+            )
+        )
+
+        for timestamp, _, level, message in events:
+            cls._safe_log(
+                logger,
+                level,
+                message,
+                timestamp=timestamp,
+            )
+
     def execute(
         self,
         config: PipelineConfig | Mapping[str, Any],
@@ -307,13 +397,32 @@ class AnalysisPipeline:
         except Exception:
             pass
 
-        record = self.run_manager.start_run(record.run_id)
+        # Logs are stored beside "runs", never inside an individual Run.
+        logs_root = self.run_manager.runs_root.parent / "logs"
 
-        
-
+        logger: RunLogger | None = None
         execution: PipelineExecutionResult | None = None
 
         try:
+            try:
+                logger = RunLogger(
+                    logs_root=logs_root,
+                    run_id=record.run_id,
+                )
+            except Exception:
+                # Failure to initialize logging must not prevent analysis.
+                logger = None
+
+            self._safe_log(
+                logger,
+                "INFO",
+                f"Run started: {record.run_id}",
+            )
+
+            # Keep start_run inside the try/finally so the logger is
+            # closed even if the lifecycle transition raises an error.
+            record = self.run_manager.start_run(record.run_id)
+
             # Preserve backward compatibility with existing callers,
             # tests, and integrations that use the original executor
             # call when no optional features are requested.
@@ -374,6 +483,11 @@ class AnalysisPipeline:
                     "the active Run."
                 )
 
+            self._log_execution(
+                logger,
+                execution,
+            )
+
             if execution.status == "cancelled":
                 self._persist_execution_summary(
                     record,
@@ -382,6 +496,12 @@ class AnalysisPipeline:
 
                 record = self.run_manager.cancel_run(
                     record.run_id
+                )
+
+                self._safe_log(
+                    logger,
+                    "WARNING",
+                    "Run finished: status=CANCELLED",
                 )
 
                 return PipelineRunResult(
@@ -401,6 +521,12 @@ class AnalysisPipeline:
                     record.run_id
                 )
 
+                self._safe_log(
+                    logger,
+                    "INFO",
+                    f"Run finished: status={record.status.value}",
+                )
+
                 return PipelineRunResult(
                     record=record,
                     execution=execution,
@@ -415,6 +541,12 @@ class AnalysisPipeline:
                 record.run_id
             )
 
+            self._safe_log(
+                logger,
+                "ERROR",
+                f"Run finished: status={record.status.value}",
+            )
+
             return PipelineRunResult(
                 record=record,
                 execution=execution,
@@ -422,6 +554,12 @@ class AnalysisPipeline:
 
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
+
+            self._safe_log(
+                logger,
+                "ERROR",
+                f"Run exception: {error}",
+            )
 
             self._persist_failure_details(
                 record,
@@ -433,8 +571,23 @@ class AnalysisPipeline:
                 record.run_id
             )
 
+            self._safe_log(
+                logger,
+                "ERROR",
+                f"Run finished: status={record.status.value}",
+            )
+
             return PipelineRunResult(
                 record=record,
                 execution=None,
                 error=error,
             )
+
+        finally:
+            if logger is not None:
+                try:
+                    logger.close()
+                except Exception:
+                    # Closing the operational log must not mask
+                    # the pipeline result.
+                    pass

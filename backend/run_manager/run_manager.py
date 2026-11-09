@@ -36,19 +36,27 @@ class RunManager:
         r"^run_range\((\d+)-(\d+)\)_(\d+)$"
     )
 
+
     def __init__(
         self,
         runs_root: str | Path = "runs",
         *,
+        logs_root: str | Path | None = None,
         registry: RunRegistry | None = None,
     ) -> None:
         if registry is not None and not isinstance(registry, RunRegistry):
             raise TypeError("registry must be a RunRegistry instance.")
 
         self.runs_root = Path(runs_root).expanduser().resolve()
+        self.logs_root = (
+            Path(logs_root).expanduser().resolve()
+            if logs_root is not None
+            else self.runs_root.parent / "logs"
+        )
         self.registry = registry if registry is not None else RunRegistry()
 
         self.recover_runs()
+
 
     @staticmethod
     def _utc_now() -> datetime:

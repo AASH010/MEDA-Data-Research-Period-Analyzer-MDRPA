@@ -379,3 +379,50 @@ def test_pipeline_remains_backward_compatible_without_cancel_event(
         "completed",
         "completed",
     ]
+
+
+def test_analysis_pipeline_logs_cancellation(
+    tmp_path,
+    monkeypatch,
+):
+    from backend.pipeline.analysis_pipeline import AnalysisPipeline
+    from backend.run_manager.run_manager import RunManager
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    manager = RunManager(
+        runs_root=tmp_path / "user_data" / "runs",
+        logs_root=tmp_path / "user_data" / "logs",
+    )
+    pipeline = AnalysisPipeline(manager)
+
+    cancel_event = Event()
+    cancel_event.set()
+
+    result = pipeline.execute(
+        PipelineConfig(
+            input_dir=input_dir,
+            start_sol=100,
+            end_sol=100,
+        ),
+        run_id="pipeline-logging-cancelled",
+        cancel_event=cancel_event,
+    )
+
+    log_path = (
+        tmp_path
+        / "user_data"
+        / "logs"
+        / "pipeline-logging-cancelled_log.txt"
+    )
+
+    assert result.cancelled is True
+    assert log_path.is_file()
+
+    content = log_path.read_text(encoding="utf-8")
+
+    assert "Run started" in content
+    assert "Stage finished: file_discovery" in content
+    assert "status=cancelled" in content
+    assert "Run finished: status=CANCELLED" in content

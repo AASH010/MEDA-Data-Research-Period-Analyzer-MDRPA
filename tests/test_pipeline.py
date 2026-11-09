@@ -1843,3 +1843,53 @@ def test_executor_optimized_with_few_files_stays_sequential(
     )
 
     assert seen["workers"] == 1
+
+
+def test_analysis_pipeline_writes_central_run_log(
+    tmp_path,
+    monkeypatch,
+):
+    from backend.pipeline.analysis_pipeline import AnalysisPipeline
+    from backend.run_manager.run_manager import RunManager
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+
+    _patch_successful_analyzers(monkeypatch)
+
+    manager = RunManager(
+        runs_root=tmp_path / "user_data" / "runs",
+        logs_root=tmp_path / "user_data" / "logs",
+    )
+    pipeline = AnalysisPipeline(manager)
+
+    result = pipeline.execute(
+        PipelineConfig(
+            input_dir=input_dir,
+            start_sol=100,
+            end_sol=100,
+        ),
+        run_id="pipeline-logging-success",
+    )
+
+    log_path = (
+        tmp_path
+        / "user_data"
+        / "logs"
+        / "pipeline-logging-success_log.txt"
+    )
+
+    assert result.successful is True
+    assert log_path.is_file()
+
+    content = log_path.read_text(encoding="utf-8")
+
+    assert "Run started" in content
+    assert "Stage started: file_discovery" in content
+    assert "Stage finished: file_discovery" in content
+    assert "Stage finished: period_ranker" in content
+    assert "Run finished: status=COMPLETED" in content
+
+    assert not (
+        result.record.paths.root_dir / "log.txt"
+    ).exists()
