@@ -1,0 +1,44 @@
+{
+    "analyzer": "MEDA Quality Analyzer",
+    "start_sol": 100,
+    "end_sol": 150,
+    "generated_at_utc": "2026-11-09T21:27:19.040782+00:00",
+    "report_row_count": 1326,
+    "analysed_field_reports": 1173,
+    "quality_field_reports": 0,
+    "quality_field_candidate_reports": 0,
+    "operational_context_flag_candidate_reports": 102,
+    "measurement_uncertainty_reports": 1071,
+    "range_check_reports": 0,
+    "special_constant_check_reports": 0,
+    "total_special_constant_matches": 0,
+    "special_constant_type_counts": {},
+    "file_status_reports": 153,
+    "analysis_status_counts": {
+        "no_target_fields": 153,
+        "analysed": 1173
+    },
+    "column_mapping_status_counts": {
+        "header_exact_match": 510,
+        "header_positional_duplicate_xml_names": 255,
+        "header_positional_ws_aliases": 408
+    },
+    "total_rows_examined_by_field": 62671923,
+    "total_missing_values_by_field": 41366459,
+    "total_values_below_declared_minimum": 0,
+    "total_values_above_declared_maximum": 0,
+    "limitations": [
+        "Quality-related fields are keyword-based candidates; undocumented flag meanings are not inferred.",
+        "Operational/context flags are reported separately from quality-related candidates.",
+        "Measurement uncertainty fields are reported separately and are not converted into a quality score.",
+        "Values outside XML-declared limits are flagged for review, not automatically classified as scientifically invalid.",
+        "Special Constants are matched only against explicitly documented XML values using exact trimmed text.",
+        "Special Constant matches are kept separate from blank or generic missing values and non-numeric values.",
+        "When one value matches multiple documented Special Constant types, it is recorded as an ambiguous match.",
+        "A field may appear in more than one report category when it meets multiple independent selection rules.",
+        "Distinct-value tracking is bounded in memory. When capped, the reported distinct count is a lower bound.",
+        "Duplicate XML names and known WS aliases are mapped only under narrowly validated positional conditions.",
+        "Ambiguous column mappings are not used for measurement calculations.",
+        "This analyzer does not determine overall instrument health or scientific suitability of a period."
+    ]
+}
