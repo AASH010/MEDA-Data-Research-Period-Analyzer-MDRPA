@@ -37,6 +37,7 @@ try:
         DEFAULT_AXIS_PREFERENCE,
         MISSING_TEXT,
         PARSERS,
+        classify_special_constant,
         norm,
         numeric_column_indexes,
         ordered_fields,
@@ -47,6 +48,7 @@ except ImportError:
         DEFAULT_AXIS_PREFERENCE,
         MISSING_TEXT,
         PARSERS,
+        classify_special_constant,
         norm,
         numeric_column_indexes,
         ordered_fields,
@@ -85,6 +87,11 @@ REPORT_COLUMNS = [
     "numeric_value_count",
     "numeric_missing_count",
     "numeric_invalid_count",
+    "special_error_count",
+    "special_saturated_count",
+    "special_unknown_count",
+    "special_not_applicable_count",
+    "special_ambiguous_count",
     "measurement_coverage_status",
     "column_mapping_status",
     "notes",
@@ -328,8 +335,6 @@ def build_metadata_index(metadata: dict) -> dict:
             index[("path", normalized_path)].append(record)
 
     return index
-
-
 def find_xml_record(
     csv_record: dict,
     metadata_index: dict,
@@ -682,8 +687,6 @@ def build_column_mapping(
     # Do not discard a possible first data row when header
     # presence cannot be established safely.
     return unknown
-
-
 # --------------------------------------------------
 # CSV analysis
 # --------------------------------------------------
@@ -708,6 +711,11 @@ def _new_result() -> dict:
         "numeric_value_count": 0,
         "numeric_missing_count": 0,
         "numeric_invalid_count": 0,
+        "special_error_count": 0,
+        "special_saturated_count": 0,
+        "special_unknown_count": 0,
+        "special_not_applicable_count": 0,
+        "special_ambiguous_count": 0,
         "measurement_coverage_status": "not_assessed",
         "column_mapping_status": "not_assessed",
         "notes": [],
@@ -840,6 +848,7 @@ def analyze_csv(
     #     number of zero-length steps is exact (no set needed);
     #   - otherwise -> parsed_count - number of distinct values.
     # ---------------------------------------------
+
     row_count = 0
     parsed_count = 0
     missing_count = 0
@@ -850,6 +859,12 @@ def analyze_csv(
     numeric_value_count = 0
     numeric_missing_count = 0
     numeric_invalid_count = 0
+
+    special_error_count = 0
+    special_saturated_count = 0
+    special_unknown_count = 0
+    special_not_applicable_count = 0
+    special_ambiguous_count = 0
 
     timestamps = array("d")
     positive_steps = array("d")
@@ -923,7 +938,9 @@ def analyze_csv(
                 if csv_index is None:
                     unmapped_numeric_columns += 1
                 else:
-                    numeric_csv_indexes.append(csv_index)
+                    numeric_csv_indexes.append(
+                        (csv_index, fields[xml_index])
+                    )
 
             time_csv_index = (
                 mapping.get(time_idx)
@@ -956,12 +973,47 @@ def analyze_csv(
                 # Numeric measurements.
                 numeric_missing_count += unmapped_numeric_columns
 
-                for csv_index in numeric_csv_indexes:
+                for csv_index, field in numeric_csv_indexes:
                     if csv_index >= row_length:
                         numeric_missing_count += 1
                         continue
 
                     raw = row[csv_index].strip()
+
+                    # XML Special Constants are metadata classifications.
+                    # They are never added to the numeric measurement values.
+                    special_category = classify_special_constant(
+                        raw,
+                        field,
+                    )
+
+                    if special_category == "missing_constant":
+                        numeric_missing_count += 1
+                        continue
+
+                    if special_category == "invalid_constant":
+                        numeric_invalid_count += 1
+                        continue
+
+                    if special_category == "error_constant":
+                        special_error_count += 1
+                        continue
+
+                    if special_category == "saturated_constant":
+                        special_saturated_count += 1
+                        continue
+
+                    if special_category == "unknown_constant":
+                        special_unknown_count += 1
+                        continue
+
+                    if special_category == "not_applicable_constant":
+                        special_not_applicable_count += 1
+                        continue
+
+                    if special_category == "ambiguous_special_constant":
+                        special_ambiguous_count += 1
+                        continue
 
                     if raw.casefold() in missing_text:
                         numeric_missing_count += 1
@@ -1075,6 +1127,14 @@ def analyze_csv(
         result["numeric_missing_count"] = numeric_missing_count
         result["numeric_invalid_count"] = numeric_invalid_count
 
+        result["special_error_count"] = special_error_count
+        result["special_saturated_count"] = special_saturated_count
+        result["special_unknown_count"] = special_unknown_count
+        result["special_not_applicable_count"] = (
+            special_not_applicable_count
+        )
+        result["special_ambiguous_count"] = special_ambiguous_count
+
     # Temporal span is based on minimum and maximum parsed
     # coordinates, not the first and last CSV rows.
     if parsed_count:
@@ -1167,8 +1227,6 @@ def analyze_csv(
     )
 
     return result
-
-
 def analyze_csv_safely(
     csv_path: Path,
     xml_record: dict | None,
@@ -1464,8 +1522,6 @@ def analyze_coverage(
                 _apply_analysis(report, _analyze_task(task))
 
     return reports
-
-
 # --------------------------------------------------
 # Sol range helpers
 # --------------------------------------------------
@@ -1585,6 +1641,34 @@ def build_product_summary(
             ),
             "total_numeric_values": sum(
                 safe_int(record.get("numeric_value_count"))
+                for record in records
+            ),
+            "total_numeric_missing": sum(
+                safe_int(record.get("numeric_missing_count"))
+                for record in records
+            ),
+            "total_numeric_invalid": sum(
+                safe_int(record.get("numeric_invalid_count"))
+                for record in records
+            ),
+            "total_special_error": sum(
+                safe_int(record.get("special_error_count"))
+                for record in records
+            ),
+            "total_special_saturated": sum(
+                safe_int(record.get("special_saturated_count"))
+                for record in records
+            ),
+            "total_special_unknown": sum(
+                safe_int(record.get("special_unknown_count"))
+                for record in records
+            ),
+            "total_special_not_applicable": sum(
+                safe_int(record.get("special_not_applicable_count"))
+                for record in records
+            ),
+            "total_special_ambiguous": sum(
+                safe_int(record.get("special_ambiguous_count"))
                 for record in records
             ),
             "total_parsed_timestamps": sum(
@@ -1846,6 +1930,10 @@ def main(argv: list[str] | None = None) -> int:
                 "Time axes are analyzed in their own coordinate systems and are not automatically converted to UTC.",
                 "LMST and LTST numeric coordinates depend on the shared parser conventions and require validation against authoritative MEDA documentation.",
                 "Product presence is not equivalent to continuous temporal coverage.",
+                "XML Special Constants are used only to classify matching CSV values; the metadata definitions themselves are never treated as measurement values.",
+                "Values matching missing_constant and invalid_constant contribute to the corresponding numeric counters.",
+                "Error, saturated, unknown, and not-applicable special values are counted separately and are not counted as valid numeric measurements.",
+                "Values matching multiple special-constant categories are counted as ambiguous and are excluded from the numeric value, missing, and invalid counters.",
             ],
         }
 
