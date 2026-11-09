@@ -5,6 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
@@ -42,6 +43,17 @@ def create_application(
     application.setOrganizationName(ORGANIZATION_NAME)
     application.setApplicationName(APP_SHORT_NAME)
     application.setApplicationDisplayName(APP_NAME)
+    stylesheet_path = (
+        Path(__file__).resolve().parents[1]
+        / "gui"
+        / "styles"
+        / "application.qss"
+    )
+
+    if stylesheet_path.is_file():
+        application.setStyleSheet(
+            stylesheet_path.read_text(encoding="utf-8")
+        )
 
     return application
 

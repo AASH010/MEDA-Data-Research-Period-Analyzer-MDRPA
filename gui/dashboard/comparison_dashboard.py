@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
+from gui.styles.classic_theme import apply_dashboard_theme
 from backend.run_manager.run_registry import RunRecord
 
 
@@ -49,6 +49,7 @@ class ComparisonDashboard(QWidget):
         self._comparison_rows: list[dict[str, Any]] = []
 
         self._build_ui()
+        apply_dashboard_theme(self)
         self._update_compare_button()
 
     @property

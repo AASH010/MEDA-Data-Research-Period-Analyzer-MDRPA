@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
+from gui.styles.classic_theme import apply_dashboard_theme
 from backend.run_manager.run_manager import RunManager
 from backend.run_manager.run_registry import RunRecord
 from gui.dashboard.comparison_dashboard import ComparisonDashboard
@@ -83,6 +83,7 @@ class DashboardView(QWidget):
         self._selected_run_id: str | None = None
 
         self._build_ui()
+        apply_dashboard_theme(self)
         self._connect_signals()
         self._show_unavailable_state()
 

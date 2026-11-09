@@ -1,0 +1,116 @@
+
+/* MDRPA - Application Theme */
+
+QMainWindow,
+QWidget {
+    background-color: #101820;
+    color: #E8EEF2;
+    font-family: "Segoe UI";
+    font-size: 10pt;
+}
+
+QGroupBox {
+    background-color: #17232D;
+    border: 1px solid #344653;
+    border-radius: 9px;
+    margin-top: 14px;
+    padding: 14px 9px 9px 9px;
+    font-weight: 600;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 5px;
+    color: #70C1B3;
+}
+
+QLabel {
+    color: #E8EEF2;
+    background: transparent;
+}
+
+QLabel[objectName$="_status"] {
+    color: #A9C5D0;
+    padding: 7px;
+}
+
+QTableWidget,
+QTreeWidget,
+QListWidget {
+    background-color: #14212B;
+    alternate-background-color: #1B2B36;
+    color: #E8EEF2;
+    border: 1px solid #344653;
+    border-radius: 5px;
+    gridline-color: #344653;
+    selection-background-color: #285D68;
+    selection-color: #FFFFFF;
+}
+
+QHeaderView::section {
+    background-color: #223744;
+    color: #E8EEF2;
+    padding: 8px;
+    border: none;
+    border-right: 1px solid #344653;
+    border-bottom: 1px solid #344653;
+    font-weight: 600;
+}
+
+QPushButton {
+    background-color: #285D68;
+    color: #FFFFFF;
+    border: 1px solid #397D88;
+    border-radius: 6px;
+    padding: 7px 13px;
+}
+
+QPushButton:hover {
+    background-color: #347887;
+}
+
+QPushButton:pressed {
+    background-color: #204B55;
+}
+
+QPushButton:disabled {
+    background-color: #35434B;
+    color: #87949B;
+}
+
+QLineEdit,
+QPlainTextEdit,
+QTextEdit,
+QComboBox,
+QSpinBox {
+    background-color: #14212B;
+    color: #E8EEF2;
+    border: 1px solid #405563;
+    border-radius: 5px;
+    padding: 6px;
+    selection-background-color: #285D68;
+}
+
+QScrollBar:vertical {
+    background: #14212B;
+    width: 11px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: #496471;
+    border-radius: 5px;
+    min-height: 25px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #70C1B3;
+}
+
+QToolTip {
+    background-color: #223744;
+    color: #FFFFFF;
+    border: 1px solid #70C1B3;
+    padding: 5px;
+}

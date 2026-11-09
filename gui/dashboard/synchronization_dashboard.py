@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 from typing import Any
-
+from gui.styles.classic_theme import apply_dashboard_theme
 import pyqtgraph as pg
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -116,6 +116,7 @@ class SynchronizationDashboard(QWidget):
         self._pair_rows: list[dict[str, str]] = []
 
         self._build_ui()
+        apply_dashboard_theme(self)
         self._show_unavailable(
             "Synchronization summary is not available."
         )

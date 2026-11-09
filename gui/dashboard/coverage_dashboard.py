@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from gui.styles.classic_theme import apply_dashboard_theme
 
 import pyqtgraph as pg
 from PySide6.QtWidgets import (
@@ -45,6 +46,7 @@ class CoverageDashboard(QWidget):
         self._summary_path: Path | None = None
 
         self._build_ui()
+        apply_dashboard_theme(self)
         self._show_unavailable("Coverage summary is not available.")
 
     @property
