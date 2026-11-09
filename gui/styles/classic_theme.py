@@ -32,8 +32,12 @@ def configure_plot(plot: pg.PlotWidget) -> None:
         axis.setTickFont(axis_font)
         axis.setTextPen("#C8D5DC")
         axis.setPen("#607782")
+
+        # Axis labels are QGraphicsTextItem objects.
         axis.label.setFont(label_font)
-        axis.label.setTextPen("#E8EEF2")
+        axis.label.setDefaultTextColor(
+            pg.mkColor("#E8EEF2")
+        )
 
     plot_item.showGrid(x=True, y=True, alpha=0.18)
 
