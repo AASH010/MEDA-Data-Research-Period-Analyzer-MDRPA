@@ -3424,3 +3424,217 @@ def test_analyze_csv_classifies_all_special_constant_categories(tmp_path):
     assert result["special_unknown_count"] == 1
     assert result["special_not_applicable_count"] == 1
     assert result["special_ambiguous_count"] == 1
+
+def test_prepared_special_constant_matches_existing_classification():
+    from backend.analyzers.meda_common import (
+        classify_special_constant,
+        classify_prepared_special_constant,
+        prepare_special_constant_metadata,
+    )
+
+    field = {
+        "special_constants": [
+            {
+                "missing_constant": "-999",
+                "invalid_constant": "-998",
+                "error_constant": "-997",
+                "saturated_constant": "-996",
+                "unknown_constant": "-995",
+                "not_applicable_constant": "-994",
+                "another_constant": "-993",
+            }
+        ]
+    }
+
+    prepared = prepare_special_constant_metadata(field)
+
+    values = [
+        "-999",
+        "-999.0",
+        "-998",
+        "-997",
+        "-996",
+        "-995",
+        "-994",
+        "-993",
+        "12.5",
+        "abc",
+        "NaN",
+    ]
+
+    for raw in values:
+        assert classify_prepared_special_constant(
+            raw, prepared
+        ) == classify_special_constant(raw, field)
+
+
+def test_prepared_special_constant_preserves_ambiguous_classification():
+    from backend.analyzers.meda_common import (
+        classify_prepared_special_constant,
+        prepare_special_constant_metadata,
+    )
+
+    field = {
+        "special_constants": [
+            {
+                "error_constant": "-993",
+                "unknown_constant": "-993.0",
+            }
+        ]
+    }
+
+    prepared = prepare_special_constant_metadata(field)
+
+    assert classify_prepared_special_constant(
+        "-993", prepared
+    ) == "ambiguous_special_constant"
+
+
+def test_prepared_special_constant_does_not_mutate_field():
+    from copy import deepcopy
+
+    from backend.analyzers.meda_common import (
+        prepare_special_constant_metadata,
+    )
+
+    field = {
+        "special_constants": [
+            {
+                "missing_constant": {
+                    "#text": "-999",
+                    "@unit": "example",
+                }
+            }
+        ]
+    }
+
+    original = deepcopy(field)
+
+    prepare_special_constant_metadata(field)
+
+    assert field == original
+
+
+def test_analyze_csv_prepares_special_metadata_once_per_numeric_field(
+    tmp_path, monkeypatch
+):
+    csv_path = write_text(
+        tmp_path / "prepared.csv",
+        "SCLK,TEMPERATURE\n"
+        "1,-999\n"
+        "2,10\n"
+        "3,20\n"
+        "4,30\n",
+    )
+
+    xml = make_xml()
+    xml["fields"][1]["special_constants"] = [
+        {"missing_constant": "-999"}
+    ]
+
+    original = analyzer.prepare_special_constant_metadata
+    calls = []
+
+    def spy(field):
+        calls.append(field)
+        return original(field)
+
+    monkeypatch.setattr(
+        analyzer,
+        "prepare_special_constant_metadata",
+        spy,
+    )
+
+    result = analyzer.analyze_csv(csv_path, xml)
+
+    assert len(calls) == 1
+    assert result["numeric_missing_count"] == 1
+    assert result["numeric_value_count"] == 3
+    assert result["numeric_invalid_count"] == 0
+
+
+def test_special_constant_metadata_is_prepared_once_per_numeric_field(
+    tmp_path,
+    monkeypatch,
+):
+    csv_path = write_text(
+        tmp_path / "prepared_metadata.csv",
+        "SCLK,TEMPERATURE,PRESSURE\n"
+        "1,-999,-998\n"
+        "2,10.5,20.5\n"
+        "3,11.5,21.5\n"
+        "4,12.5,22.5\n",
+    )
+
+    xml = make_xml()
+
+    xml["fields"][1]["special_constants"] = {
+        "missing_constant": "-999",
+    }
+
+    xml["fields"][2]["special_constants"] = {
+        "invalid_constant": "-998",
+    }
+
+    original_prepare = analyzer.prepare_special_constant_metadata
+    calls = []
+
+    def counted_prepare(field):
+        calls.append(field)
+        return original_prepare(field)
+
+    monkeypatch.setattr(
+        analyzer,
+        "prepare_special_constant_metadata",
+        counted_prepare,
+    )
+
+    result = analyzer.analyze_csv(csv_path, xml)
+
+    # Two numeric fields, therefore exactly two preparations.
+    assert len(calls) == 2
+
+    assert result["numeric_missing_count"] == 1
+    assert result["numeric_invalid_count"] == 1
+    assert result["numeric_value_count"] == 6
+
+
+def test_special_constant_preparation_is_not_repeated_per_row(
+    tmp_path,
+    monkeypatch,
+):
+    csv_path = write_text(
+        tmp_path / "many_rows.csv",
+        "SCLK,TEMPERATURE\n"
+        "1,-999\n"
+        "2,-999\n"
+        "3,-999\n"
+        "4,-999\n"
+        "5,-999\n",
+    )
+
+    xml = make_xml()
+
+    xml["fields"][1]["special_constants"] = {
+        "missing_constant": "-999",
+    }
+
+    original_prepare = analyzer.prepare_special_constant_metadata
+    calls = 0
+
+    def counted_prepare(field):
+        nonlocal calls
+        calls += 1
+        return original_prepare(field)
+
+    monkeypatch.setattr(
+        analyzer,
+        "prepare_special_constant_metadata",
+        counted_prepare,
+    )
+
+    result = analyzer.analyze_csv(csv_path, xml)
+
+    assert calls == 1
+    assert result["numeric_missing_count"] == 5
+    assert result["numeric_value_count"] == 0

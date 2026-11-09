@@ -238,36 +238,39 @@ def get_special_constant_values(field: dict) -> dict[str, frozenset[str]]:
     }
 
 
-def classify_special_constant(
-    raw_value,
-    field: dict,
-) -> Optional[str]:
-    """Classify a raw CSV value using the field's XML Special Constants.
+def prepare_special_constant_metadata(field: dict) -> dict:
+    """Prepare Special Constant metadata once for repeated CSV matching.
 
-    Matching rules:
-        1. Case-insensitive exact textual matching.
-        2. Numeric equivalence for finite numeric values.
-
-    Examples:
-        XML value "-999" matches CSV "-999".
-        XML value "-999" matches CSV "-999.0".
-        XML value "-999" matches CSV "-9.99e2".
-
-    Return values:
-        - The documented category, e.g. "missing_constant".
-        - "ambiguous_special_constant" if the same value is documented
-          under more than one category.
-        - None if the value does not match a documented category.
-
-    This function does not convert categories into Missing or Invalid.
-    The caller must apply the project's explicit classification policy.
+    The returned structure is read-only by convention and does not
+    modify the original XML field.
     """
-    if raw_value is None:
-        return None
-
     documented = get_special_constant_values(field)
 
-    if not documented:
+    prepared = {}
+
+    for category, values in documented.items():
+        prepared[category] = tuple(
+            (
+                _normalized_special_value(value),
+                _numeric_special_value(value),
+            )
+            for value in values
+        )
+
+    return prepared
+
+
+def classify_prepared_special_constant(
+    raw_value,
+    prepared_metadata: dict,
+) -> Optional[str]:
+    """Classify a CSV value using previously prepared field metadata.
+
+    Matching semantics are identical to classify_special_constant:
+    case-insensitive exact text matching, finite Decimal equivalence,
+    and ambiguous classification when multiple categories match.
+    """
+    if raw_value is None or not prepared_metadata:
         return None
 
     raw_text = _normalized_special_value(raw_value)
@@ -276,22 +279,13 @@ def classify_special_constant(
         return None
 
     raw_number = _numeric_special_value(raw_value)
-
     matched_categories = set()
 
-    for category, documented_values in documented.items():
-        for documented_value in documented_values:
-            documented_text = _normalized_special_value(
-                documented_value
-            )
-
+    for category, documented_values in prepared_metadata.items():
+        for documented_text, documented_number in documented_values:
             if documented_text == raw_text:
                 matched_categories.add(category)
                 break
-
-            documented_number = _numeric_special_value(
-                documented_value
-            )
 
             if (
                 raw_number is not None
@@ -309,6 +303,18 @@ def classify_special_constant(
 
     return next(iter(matched_categories))
 
+
+def classify_special_constant(
+    raw_value,
+    field: dict,
+) -> Optional[str]:
+    """Backward-compatible classification using the original field."""
+    prepared_metadata = prepare_special_constant_metadata(field)
+
+    return classify_prepared_special_constant(
+        raw_value,
+        prepared_metadata,
+    )
 
 def parse_sclk(text: str) -> Optional[float]:
     """Parse a numeric SCLK coordinate without assigning UTC meaning."""

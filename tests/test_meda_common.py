@@ -17,8 +17,11 @@ from backend.analyzers.meda_common import (
     validate_field_metadata,
     pick_time_column,
     numeric_column_indexes,
+    get_special_constant_values,
+    classify_special_constant,
+    prepare_special_constant_metadata,
+    classify_prepared_special_constant,
 )
-
 
 # ---------------------------------------------------------------------
 # Shared constants and normalization
@@ -686,3 +689,418 @@ def test_numeric_column_indexes_supports_omitted_skip_argument():
     ]
 
     assert numeric_column_indexes(fields) == [0]
+
+
+# ---------------------------------------------------------------------
+# Special Constants metadata extraction and classification
+# ---------------------------------------------------------------------
+
+def test_get_special_constant_values_extracts_all_categories():
+    field = {
+        "name": "TEMPERATURE",
+        "special_constants": [
+            {
+                "missing_constant": "-999",
+                "invalid_constant": "-998",
+                "error_constant": ["-997", "-996"],
+                "saturated_constant": "-995",
+                "unknown_constant": "-994",
+                "not_applicable_constant": "-993",
+            }
+        ],
+    }
+
+    result = get_special_constant_values(field)
+
+    assert result == {
+        "missing_constant": frozenset({"-999"}),
+        "invalid_constant": frozenset({"-998"}),
+        "error_constant": frozenset({"-997", "-996"}),
+        "saturated_constant": frozenset({"-995"}),
+        "unknown_constant": frozenset({"-994"}),
+        "not_applicable_constant": frozenset({"-993"}),
+    }
+
+
+def test_get_special_constant_values_supports_xml_text_objects():
+    field = {
+        "special_constants": {
+            "missing_constant": {
+                "@unit": "none",
+                "#text": "-999",
+            },
+            "invalid_constant": {
+                "value": {
+                    "#text": "-998",
+                },
+            },
+        },
+    }
+
+    result = get_special_constant_values(field)
+
+    assert result["missing_constant"] == frozenset({"-999"})
+    assert result["invalid_constant"] == frozenset({"-998"})
+
+
+def test_get_special_constant_values_merges_repeated_categories():
+    field = {
+        "special_constants": [
+            {"missing_constant": "-999"},
+            {"missing_constant": ["-998", "-997"]},
+        ],
+    }
+
+    result = get_special_constant_values(field)
+
+    assert result["missing_constant"] == frozenset({
+        "-999",
+        "-998",
+        "-997",
+    })
+
+
+def test_get_special_constant_values_ignores_attributes():
+    field = {
+        "special_constants": {
+            "missing_constant": {
+                "@description": "-999",
+                "@unit": "test",
+                "#text": "-998",
+            },
+        },
+    }
+
+    result = get_special_constant_values(field)
+
+    assert result == {
+        "missing_constant": frozenset({"-998"}),
+    }
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {},
+        {"special_constants": None},
+        {"special_constants": ""},
+        {"special_constants": 123},
+        {"special_constants": []},
+        {"special_constants": {}},
+        None,
+        [],
+        "invalid",
+    ],
+)
+def test_get_special_constant_values_handles_missing_or_invalid_metadata(field):
+    assert get_special_constant_values(field) == {}
+
+
+def test_get_special_constant_values_ignores_unknown_metadata_keys():
+    field = {
+        "special_constants": {
+            "description": "-999",
+            "missing_constant": "-998",
+            "other_metadata": "-997",
+        },
+    }
+
+    result = get_special_constant_values(field)
+
+    assert result == {
+        "missing_constant": frozenset({"-998"}),
+    }
+
+
+def test_get_special_constant_values_does_not_modify_source_metadata():
+    field = {
+        "special_constants": [
+            {
+                "missing_constant": {
+                    "#text": "-999",
+                    "@unit": "none",
+                },
+                "invalid_constant": ["-998", "-997"],
+            }
+        ],
+    }
+
+    original = copy.deepcopy(field)
+
+    get_special_constant_values(field)
+
+    assert field == original
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        ("-999", "missing_constant"),
+        ("-998", "invalid_constant"),
+        ("-997", "error_constant"),
+        ("-996", "saturated_constant"),
+        ("-995", "unknown_constant"),
+        ("-994", "not_applicable_constant"),
+        ("12.5", None),
+        ("abc", None),
+    ],
+)
+def test_classify_special_constant_categories(raw_value, expected):
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+            "invalid_constant": "-998",
+            "error_constant": "-997",
+            "saturated_constant": "-996",
+            "unknown_constant": "-995",
+            "not_applicable_constant": "-994",
+        },
+    }
+
+    assert classify_special_constant(raw_value, field) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        ("-999", "missing_constant"),
+        ("-999.0", "missing_constant"),
+        ("-9.99e2", "missing_constant"),
+        ("-998.00", "invalid_constant"),
+        ("-9.98e2", "invalid_constant"),
+    ],
+)
+def test_classify_special_constant_supports_numeric_equivalence(
+    raw_value,
+    expected,
+):
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+            "invalid_constant": "-998",
+        },
+    }
+
+    assert classify_special_constant(raw_value, field) == expected
+
+
+def test_classify_special_constant_text_matching_is_case_insensitive():
+    field = {
+        "special_constants": {
+            "unknown_constant": "NOT_AVAILABLE",
+        },
+    }
+
+    assert (
+        classify_special_constant("not_available", field)
+        == "unknown_constant"
+    )
+
+
+def test_classify_special_constant_detects_ambiguous_categories():
+    field = {
+        "special_constants": {
+            "error_constant": "-999",
+            "unknown_constant": "-999.0",
+        },
+    }
+
+    assert (
+        classify_special_constant("-999", field)
+        == "ambiguous_special_constant"
+    )
+
+
+def test_classify_special_constant_detects_numeric_ambiguity():
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+            "invalid_constant": "-9.99e2",
+        },
+    }
+
+    assert (
+        classify_special_constant("-999.0", field)
+        == "ambiguous_special_constant"
+    )
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        None,
+        "",
+        " ",
+    ],
+)
+def test_classify_special_constant_returns_none_for_empty_values(raw_value):
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+        },
+    }
+
+    assert classify_special_constant(raw_value, field) is None
+
+
+def test_classify_special_constant_does_not_match_non_finite_numbers():
+    field = {
+        "special_constants": {
+            "missing_constant": "NaN",
+            "invalid_constant": "Infinity",
+        },
+    }
+
+    assert classify_special_constant("NaN", field) is None
+    assert classify_special_constant("Infinity", field) is None
+
+
+# ---------------------------------------------------------------------
+# Prepared Special Constants metadata
+# ---------------------------------------------------------------------
+
+def test_prepare_special_constant_metadata_prepares_all_categories():
+    field = {
+        "special_constants": {
+            "missing_constant": ["-999", "-998"],
+            "invalid_constant": "-997",
+            "error_constant": "-996",
+        },
+    }
+
+    prepared = prepare_special_constant_metadata(field)
+
+    assert set(prepared) == {
+        "missing_constant",
+        "invalid_constant",
+        "error_constant",
+    }
+
+    assert len(prepared["missing_constant"]) == 2
+    assert len(prepared["invalid_constant"]) == 1
+    assert len(prepared["error_constant"]) == 1
+
+
+def test_prepare_special_constant_metadata_handles_empty_metadata():
+    assert prepare_special_constant_metadata({}) == {}
+    assert prepare_special_constant_metadata(None) == {}
+
+
+def test_prepare_special_constant_metadata_does_not_modify_source():
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+            "invalid_constant": "-998",
+        },
+    }
+
+    original = copy.deepcopy(field)
+
+    prepare_special_constant_metadata(field)
+
+    assert field == original
+
+
+def test_classify_prepared_special_constant_matches_original_classifier():
+    field = {
+        "special_constants": {
+            "missing_constant": ["-999", "-998"],
+            "invalid_constant": "-997",
+            "error_constant": "-996",
+            "saturated_constant": "-995",
+            "unknown_constant": "-994",
+            "not_applicable_constant": "-993",
+        },
+    }
+
+    prepared = prepare_special_constant_metadata(field)
+
+    values = [
+        "-999",
+        "-998.0",
+        "-997",
+        "-996",
+        "-995",
+        "-994",
+        "-993",
+        "12.5",
+        "abc",
+        "",
+        None,
+    ]
+
+    for raw_value in values:
+        assert (
+            classify_prepared_special_constant(
+                raw_value,
+                prepared,
+            )
+            == classify_special_constant(
+                raw_value,
+                field,
+            )
+        )
+
+
+def test_classify_prepared_special_constant_preserves_ambiguity():
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+            "unknown_constant": "-9.99e2",
+        },
+    }
+
+    prepared = prepare_special_constant_metadata(field)
+
+    assert (
+        classify_prepared_special_constant(
+            "-999.0",
+            prepared,
+        )
+        == "ambiguous_special_constant"
+    )
+
+
+def test_classify_prepared_special_constant_handles_empty_metadata():
+    assert classify_prepared_special_constant("-999", {}) is None
+    assert classify_prepared_special_constant("-999", None) is None
+
+
+def test_prepared_metadata_is_a_snapshot_of_original_field():
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+        },
+    }
+
+    prepared = prepare_special_constant_metadata(field)
+
+    field["special_constants"]["missing_constant"] = "-888"
+
+    assert (
+        classify_prepared_special_constant("-999", prepared)
+        == "missing_constant"
+    )
+
+    assert (
+        classify_prepared_special_constant("-888", prepared)
+        is None
+    )
+
+
+def test_prepared_classifier_does_not_modify_prepared_metadata():
+    field = {
+        "special_constants": {
+            "missing_constant": "-999",
+            "invalid_constant": "-998",
+        },
+    }
+
+    prepared = prepare_special_constant_metadata(field)
+    original = copy.deepcopy(prepared)
+
+    classify_prepared_special_constant("-999", prepared)
+    classify_prepared_special_constant("-998", prepared)
+    classify_prepared_special_constant("12.5", prepared)
+
+    assert prepared == original

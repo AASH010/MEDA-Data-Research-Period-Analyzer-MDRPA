@@ -37,7 +37,8 @@ try:
         DEFAULT_AXIS_PREFERENCE,
         MISSING_TEXT,
         PARSERS,
-        classify_special_constant,
+        classify_prepared_special_constant,
+        prepare_special_constant_metadata,
         norm,
         numeric_column_indexes,
         ordered_fields,
@@ -48,7 +49,8 @@ except ImportError:
         DEFAULT_AXIS_PREFERENCE,
         MISSING_TEXT,
         PARSERS,
-        classify_special_constant,
+        classify_prepared_special_constant,
+        prepare_special_constant_metadata,
         norm,
         numeric_column_indexes,
         ordered_fields,
@@ -335,6 +337,8 @@ def build_metadata_index(metadata: dict) -> dict:
             index[("path", normalized_path)].append(record)
 
     return index
+
+
 def find_xml_record(
     csv_record: dict,
     metadata_index: dict,
@@ -928,7 +932,8 @@ def analyze_csv(
             if mapping_note:
                 result["notes"].append(mapping_note)
 
-            # Resolve column positions once, not once per row.
+            # Resolve column positions and prepare Special Constant
+            # metadata once per numeric XML field, before processing rows.
             numeric_csv_indexes = []
             unmapped_numeric_columns = 0
 
@@ -937,10 +942,17 @@ def analyze_csv(
 
                 if csv_index is None:
                     unmapped_numeric_columns += 1
-                else:
-                    numeric_csv_indexes.append(
-                        (csv_index, fields[xml_index])
-                    )
+                    continue
+
+                field = fields[xml_index]
+
+                prepared_metadata = prepare_special_constant_metadata(
+                    field
+                )
+
+                numeric_csv_indexes.append(
+                    (csv_index, prepared_metadata)
+                )
 
             time_csv_index = (
                 mapping.get(time_idx)
@@ -973,7 +985,7 @@ def analyze_csv(
                 # Numeric measurements.
                 numeric_missing_count += unmapped_numeric_columns
 
-                for csv_index, field in numeric_csv_indexes:
+                for csv_index, prepared_metadata in numeric_csv_indexes:
                     if csv_index >= row_length:
                         numeric_missing_count += 1
                         continue
@@ -982,9 +994,9 @@ def analyze_csv(
 
                     # XML Special Constants are metadata classifications.
                     # They are never added to the numeric measurement values.
-                    special_category = classify_special_constant(
+                    special_category = classify_prepared_special_constant(
                         raw,
-                        field,
+                        prepared_metadata,
                     )
 
                     if special_category == "missing_constant":
@@ -1522,6 +1534,8 @@ def analyze_coverage(
                 _apply_analysis(report, _analyze_task(task))
 
     return reports
+
+
 # --------------------------------------------------
 # Sol range helpers
 # --------------------------------------------------
@@ -1683,8 +1697,6 @@ def build_product_summary(
         }
 
     return summaries
-
-
 # --------------------------------------------------
 # Save reports
 # --------------------------------------------------
