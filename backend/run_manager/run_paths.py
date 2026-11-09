@@ -1,8 +1,11 @@
+
 """Path management for isolated MEDA analysis runs.
 
-Each run receives its own directory containing input, output, and logs
-subdirectories. This module only manages filesystem paths; it does not
-copy source data or execute analysis tasks.
+Each run receives its own directory containing input and output
+subdirectories. Run logs are managed centrally outside this module.
+
+This module only manages filesystem paths; it does not copy source
+data or execute analysis tasks.
 """
 
 from __future__ import annotations
@@ -36,7 +39,6 @@ class RunPaths:
     root_dir: Path
     input_dir: Path
     output_dir: Path
-    logs_dir: Path
 
     @classmethod
     def create(
@@ -75,7 +77,6 @@ class RunPaths:
             root_dir=root_dir,
             input_dir=root_dir / "input",
             output_dir=root_dir / "output",
-            logs_dir=root_dir / "logs",
         )
 
         if create:
@@ -84,7 +85,6 @@ class RunPaths:
 
             paths.input_dir.mkdir()
             paths.output_dir.mkdir()
-            paths.logs_dir.mkdir()
 
         return paths
 

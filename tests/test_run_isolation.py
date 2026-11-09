@@ -24,7 +24,7 @@ def test_create_run_builds_isolated_directory_structure(manager):
     assert record.paths.root_dir.is_dir()
     assert record.paths.input_dir.is_dir()
     assert record.paths.output_dir.is_dir()
-    assert record.paths.logs_dir.is_dir()
+    assert not (record.paths.root_dir / "logs").exists()
 
     assert record.status is RunStatus.PENDING
 
@@ -36,7 +36,8 @@ def test_each_run_has_separate_directories(manager):
     assert first.paths.root_dir != second.paths.root_dir
     assert first.paths.input_dir != second.paths.input_dir
     assert first.paths.output_dir != second.paths.output_dir
-    assert first.paths.logs_dir != second.paths.logs_dir
+    assert not (first.paths.root_dir / "logs").exists()
+    assert not (second.paths.root_dir / "logs").exists()
 
 
 # ---------------------------------------------------------------------
