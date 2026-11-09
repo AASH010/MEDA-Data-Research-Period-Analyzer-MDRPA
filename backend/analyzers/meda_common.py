@@ -122,6 +122,24 @@ def _numeric_special_value(value) -> Optional[Decimal]:
     return number
 
 
+def _is_non_finite_numeric_value(value) -> bool:
+    """Return True when value represents NaN or infinity.
+
+    This check is intentionally separate from ordinary numeric
+    conversion because non-finite values must not match Special
+    Constant metadata through textual equality.
+    """
+    if value is None or isinstance(value, bool):
+        return False
+
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+    return not number.is_finite()
+
+
 def _collect_special_constant_text_values(value) -> set[str]:
     """Collect textual values from one Special Constant definition.
 
@@ -243,6 +261,15 @@ def prepare_special_constant_metadata(field: dict) -> dict:
 
     The returned structure is read-only by convention and does not
     modify the original XML field.
+
+    Each documented value is stored as:
+        (
+            normalized_text_value,
+            finite_decimal_value,
+        )
+
+    This avoids repeatedly extracting and converting XML metadata
+    while processing CSV rows.
     """
     documented = get_special_constant_values(field)
 
@@ -266,9 +293,14 @@ def classify_prepared_special_constant(
 ) -> Optional[str]:
     """Classify a CSV value using previously prepared field metadata.
 
-    Matching semantics are identical to classify_special_constant:
-    case-insensitive exact text matching, finite Decimal equivalence,
-    and ambiguous classification when multiple categories match.
+    Matching rules:
+    - Text matching is case-insensitive and exact.
+    - Numeric matching uses finite Decimal equivalence.
+    - NaN and infinity are never matched as Special Constants.
+    - Multiple matching categories produce an ambiguous classification.
+    - No matching category returns None.
+
+    The supplied prepared metadata is not modified.
     """
     if raw_value is None or not prepared_metadata:
         return None
@@ -278,11 +310,25 @@ def classify_prepared_special_constant(
     if raw_text is None:
         return None
 
+    # Non-finite numeric values must not match through text equality.
+    # For example, "NaN" must not match a documented "NaN" value.
+    if _is_non_finite_numeric_value(raw_value):
+        return None
+
     raw_number = _numeric_special_value(raw_value)
     matched_categories = set()
 
     for category, documented_values in prepared_metadata.items():
         for documented_text, documented_number in documented_values:
+
+            # Ignore non-finite values in the XML metadata as well.
+            # They must not become matchable through textual equality.
+            if (
+                documented_text is not None
+                and _is_non_finite_numeric_value(documented_text)
+            ):
+                continue
+
             if documented_text == raw_text:
                 matched_categories.add(category)
                 break
@@ -308,13 +354,19 @@ def classify_special_constant(
     raw_value,
     field: dict,
 ) -> Optional[str]:
-    """Backward-compatible classification using the original field."""
+    """Backward-compatible classification using the original field.
+
+    Existing callers can continue passing the original XML field.
+    The function prepares metadata and delegates classification to
+    classify_prepared_special_constant().
+    """
     prepared_metadata = prepare_special_constant_metadata(field)
 
     return classify_prepared_special_constant(
         raw_value,
         prepared_metadata,
     )
+
 
 def parse_sclk(text: str) -> Optional[float]:
     """Parse a numeric SCLK coordinate without assigning UTC meaning."""

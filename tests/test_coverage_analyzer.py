@@ -3566,7 +3566,9 @@ def test_special_constant_metadata_is_prepared_once_per_numeric_field(
         "4,12.5,22.5\n",
     )
 
-    xml = make_xml()
+    xml = make_xml(
+    names=("SCLK", "TEMPERATURE", "PRESSURE")
+    )
 
     xml["fields"][1]["special_constants"] = {
         "missing_constant": "-999",
