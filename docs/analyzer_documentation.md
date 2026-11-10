@@ -1,238 +1,309 @@
-# Analyzer Documentation
+<div align="center">
 
-## MEDA Data Research & Period Analyzer (MDRPA)
+# 🧪 Analyzer Technical Reference
 
-## 1. Purpose
+### MEDA Data Research & Period Analyzer (MDRPA) · `backend/analyzers/`
 
-This document provides the technical reference for the scientific analysis modules located in:
+![Scope](https://img.shields.io/badge/Scope-MEDA%20Calibrated%20Data%20Only-C1440E?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Intensive%20Active%20Development-F59E0B?style=for-the-badge)
+![Reliability](https://img.shields.io/badge/Operational%20Reliability-~65%25%20(preliminary)-3B82F6?style=for-the-badge)
+![Accuracy](https://img.shields.io/badge/Scientific%20Accuracy-Not%20Yet%20Quantified-6B7280?style=for-the-badge)
 
-`backend/analyzers/`
+*This document describes what the analyzer source code does today. It does not define new scientific methodology or authorize changes to analyzer behavior.*
 
-It describes each analyzer's responsibility, public functions, inputs, outputs, processing behavior, limitations, and integration considerations.
+</div>
 
-The document reflects the analyzer source code currently present in the repository. It does not define a new scientific methodology or authorize changes to existing analyzer behavior.
+---
 
-The following distinctions are used throughout:
+## 📑 Contents
 
-- **Implemented:** A function or module exists in the inspected source code.
-- **Input Contract:** The information a function expects to receive.
-- **Output Contract:** The information a function returns or writes.
-- **Limitation:** A boundary that must be respected when interpreting results.
-- **Integration Note:** A requirement for future pipeline integration.
+| | | |
+|---|---|---|
+| [1. Purpose & Terminology](#1-purpose--terminology) | [8. Coverage Analyzer](#8--coverage-analyzer) | [15. Testing & Regression](#15-testing--regression-requirements) |
+| [2. Development Status](#2-development-status) | [9. Quality Analyzer](#9--quality-analyzer) | [16. Interpretation Boundaries](#16-scientific-interpretation-boundaries) |
+| [3. Reliability & Accuracy](#3-reliability-and-accuracy-assessment) | [10. Synchronization Analyzer](#10--synchronization-analyzer) | [17. Development Priorities](#17-remaining-development-priorities) |
+| [4. Package Structure](#4-package-structure) | [11. Period Ranker](#11--period-ranker) | [18. Change Control](#18-maintenance-and-change-control) |
+| [5. Shared Utilities](#5--shared-utilities) | [12. Dependency Flow](#12-dependency-flow) | [19. Related Docs](#19-related-documentation) |
+| [6. File Discovery](#6--file-discovery) | [13. Integration Requirements](#13-interface-differences-and-integration-requirements) | [20. Summary](#20-assessment-summary) |
+| [7. XML Metadata Parser](#7--xml-metadata-parser) | [14. Command-Line Interfaces](#14-command-line-interfaces) | [21. Governing Principle](#21-governing-principle) |
 
-## 2. Analyzer Package Structure
+---
+
+## 1. Purpose & Terminology
+
+This is the technical reference for the scientific analysis modules in `backend/analyzers/`. For each analyzer it describes responsibility, public functions, inputs, outputs, behavior, status, limitations, and integration considerations.
+
+MDRPA's long-term vision is a broader platform for NASA mission data. The **current** phase is:
+
+> **NASA Perseverance Rover · Mars Environmental Dynamics Analyzer (MEDA) · Calibrated Data.**
+> Derived and Partially Processed MEDA products are out of scope.
+
+### 1.1 Status vocabulary
+
+| Term | Meaning |
+|---|---|
+| ✅ **Implemented** | The function or module exists in the inspected source code. |
+| 🧪 **Tested** | Passed specific tests. Does not imply complete validation. |
+| 🏁 **Accepted** | Passed the project's required review and acceptance process. |
+| 🔧 **In Progress** | Development or improvement is ongoing. |
+| 🗓️ **Planned** | Intended but not yet implemented. |
+| 📥 **Input Contract** | What a function expects to receive. |
+| 📤 **Output Contract** | What a function returns or writes. |
+| ⚠️ **Limitation** | A boundary that must be respected when interpreting results. |
+| 🔌 **Integration Note** | A requirement for future pipeline integration. |
+
+> [!IMPORTANT]
+> A component must not be described as complete merely because its initial implementation exists.
+
+---
+
+## 2. Development Status
+
+The analyzer layer is the scientific core of MDRPA: it examines calibrated MEDA products, extracts characteristics, produces indicators, and prepares inputs for candidate period evaluation.
+
+| Component | State |
+|---|---|
+| Shared MEDA Utilities | ✅ Implemented · ongoing review and refinement |
+| File Discovery | ✅ Implemented · ongoing testing and improvement |
+| XML Metadata Parser | ✅ Implemented · ongoing validation and refinement |
+| Coverage Analyzer | ✅ Implemented · ongoing scientific and performance review |
+| Quality Analyzer | ✅ Implemented · ongoing development and scientific review |
+| Synchronization Analyzer | ✅ Implemented · ongoing testing and refinement |
+| Period Ranker | ✅ Implemented · ongoing methodology and integration review |
+
+This table describes the implementation stage. It does not mean every input condition, scientific assumption, or integration scenario is validated.
+
+### 2.1 Current capabilities
+
+- Discover and inventory supported MEDA files.
+- Extract metadata and field definitions from XML products.
+- Examine CSV structure and temporal coverage.
+- Investigate field-level numerical characteristics.
+- Identify documented numerical boundaries.
+- Examine candidate quality-related and uncertainty-related fields.
+- Compare timestamps across MEDA products.
+- Evaluate candidate Sol windows with available indicators.
+
+### 2.2 Known limitations
+
+The analyzer layer is **not** yet a finalized scientific engine. Further work is needed in:
+
+| Area | Area |
+|---|---|
+| Scientific interpretation and validation | Special-value and special-constant handling |
+| Official quality-flag interpretation (where documented) | Measurement uncertainty analysis |
+| Physical plausibility assessment | Analyzer-to-analyzer consistency |
+| Pipeline integration | Performance optimization |
+| Regression testing on representative datasets | Report completeness and traceability |
+
+Some areas have partial infrastructure; others are planned. The presence of a field, function, or report column is **not** proof that its scientific meaning or calculation has been validated.
+
+---
+
+## 3. Reliability and Accuracy Assessment
+
+> [!NOTE]
+> The figures below are an **engineering estimate** of development maturity. They are not a certification, a benchmark, or a statistically measured accuracy score.
+
+### 3.1 Operational reliability: ~65% (preliminary)
+
+Reflects the existence of the principal modules, availability of their main workflows, structured outputs, the current level of testing, and the remaining edge cases and validation work.
+
+It is a subjective assessment. It does **not** mean 65% of executions are correct or that 35% are wrong.
+
+### 3.2 Scientific accuracy: Not Yet Quantified
+
+A single accuracy percentage cannot responsibly be given, because the analyzers produce different kinds of output and each needs its own validation method:
+
+| Output | How it can be validated |
+|---|---|
+| File inventory | Against a manually verified file inventory |
+| XML metadata extraction | Against authoritative XML content |
+| Timestamp parsing | Against known time-coordinate examples |
+| Coverage statistics | Against independently calculated results |
+| Synchronization matching | Against controlled timestamp series |
+| Ranking behavior | Against documented metric calculations and expected ordering |
+
+This does not mean results are inaccurate. It means a comprehensive figure has not yet been established.
+
+### 3.3 What establishing accuracy requires
+
+1. Representative official calibrated MEDA products.
+2. Authoritative XML metadata and instrument documentation.
+3. Independently calculated expected results.
+4. Controlled test cases for known edge conditions.
+5. Comparison of analyzer outputs against reference results.
+6. Documented discrepancies and their resolution.
+7. Regression testing after scientific logic changes.
+8. Repeated validation across products and Sol ranges.
+
+### 3.4 Reliability vs. accuracy
+
+| Assessment | Current state | Meaning |
+|---|---|---|
+| Operational Reliability | ≈ 65% | Preliminary estimate of development maturity |
+| Scientific Accuracy | Not Yet Quantified | No comprehensive reference-based percentage |
+| Integration Maturity | 🔧 In Progress | Workflows still need broader pipeline integration |
+| Scientific Validation | 🔧 In Progress | More reference-based testing and review needed |
+
+Technically stable execution does not guarantee scientific correctness, and a sound calculation in one analyzer does not make the whole application ready for research use.
+
+---
+
+## 4. Package Structure
 
 ```text
 backend/
 └── analyzers/
     ├── __init__.py
-    ├── meda_common.py
-    ├── file_discovery.py
-    ├── xml_parser.py
-    ├── coverage_analyzer.py
-    ├── quality_analyzer.py
-    ├── synchronization_analyzer.py
-    └── period_ranker.py
+    ├── meda_common.py              shared time/field utilities
+    ├── file_discovery.py           inventory
+    ├── xml_parser.py               metadata extraction
+    ├── coverage_analyzer.py        temporal & value coverage
+    ├── quality_analyzer.py         field-level quality candidates & ranges
+    ├── synchronization_analyzer.py cross-product timestamp matching
+    └── period_ranker.py            candidate window comparison
 ```
 
-The analyzers form a collection of independently callable modules.
+The analyzers are independently callable modules. They do **not** yet share a standardized analyzer interface: some return records directly, while the Period Ranker consumes previously generated report files.
 
-They do not yet establish a single standardized analyzer interface. In particular, some modules return records directly, while the period ranker consumes previously generated report files.
+### At a glance
 
-## 3. Shared Utilities — `meda_common.py`
-
-### 3.1 Responsibility
-
-`meda_common.py` provides shared utilities for:
-
-- Time-axis recognition and parsing.
-- XML field ordering.
-- XML field metadata structural validation.
-- Numeric field identification.
-- Time-column selection.
-- Normalization of field and column names.
-
-It does not perform complete scientific validation.
-
-### 3.2 Time-Axis Support
-
-The module supports the following time kinds:
-
-| Time Kind | Handling | Important Limitation |
+| Module | Consumes | Produces |
 |---|---|---|
-| SCLK | Parsed as a finite numeric coordinate | Not converted to UTC |
-| UTC | Timezone-aware ISO-8601 values normalized to UTC epoch seconds | Naive timestamps are not assumed to be UTC |
-| LMST | Converted to a linear Mars-sol coordinate | Not a UTC conversion |
-| LTST | Converted to a nominal Sol/local-clock coordinate | Not a precise elapsed SI-time scale |
-| ISO Naive | Timezone-naive ISO values retained as a separate coordinate | Timezone remains unspecified |
-
-The mean Mars solar day constant used by the implementation is:
-
-`SOL_SECONDS = 88775.244`
-
-This is used as a coordinate scale for LMST and nominal LTST handling. It must not be interpreted as an Earth UTC conversion.
-
-### 3.3 Main Functions
-
-| Function | Responsibility |
-|---|---|
-| `norm(value)` | Normalize names for comparisons |
-| `parse_sclk(text)` | Parse a numeric SCLK coordinate |
-| `parse_lmst(text)` | Parse LMST into a linear Sol coordinate |
-| `parse_ltst(text)` | Parse LTST into a nominal coordinate |
-| `parse_iso(text, want_aware)` | Parse ISO-8601 while preserving timezone-awareness rules |
-| `column_time_kind(name)` | Identify supported time kinds from field names |
-| `ordered_fields(fields)` | Order XML fields by field number, retaining document order as fallback |
-| `validate_field_metadata(fields)` | Report structural field metadata warnings |
-| `pick_time_column(fields, preference)` | Select a supported time field according to a preference list |
-| `numeric_column_indexes(fields, skip)` | Identify XML-declared numeric columns while excluding time fields |
-
-### 3.4 Important Behavior
-
-- Non-finite numeric values are rejected by the shared numeric parser.
-- Naive and timezone-aware ISO timestamps are treated separately.
-- Missing or invalid XML field numbers do not automatically cause field definitions to be discarded.
-- Duplicate field names and field numbers are reported structurally.
-- Time-column discovery is based on field names and metadata; it does not prove that the actual CSV values are valid.
-
-### 3.5 Integration Requirements
-
-All analyzers using these utilities must preserve the selected time-axis kind and report parsing failures appropriately.
-
-A parsed coordinate must not automatically be described as a scientifically validated timestamp.
+| `file_discovery` | Input directory | Inventory records → CSV |
+| `xml_parser` | XML files | Metadata records → JSON |
+| `coverage_analyzer` | Inventory + metadata | Coverage reports (CSV) + summary (JSON) |
+| `quality_analyzer` | Inventory + metadata | Quality reports (CSV) + summary (JSON) |
+| `synchronization_analyzer` | Inventory + metadata records | File + pair reports (CSV) + summary (JSON) |
+| `period_ranker` | Five report CSVs | Ranking CSV + summary JSON |
 
 ---
 
-## 4. File Discovery — `file_discovery.py`
+## 5. 🧰 Shared Utilities
 
-### 4.1 Responsibility
+**Module:** `meda_common.py`
 
-The File Discovery analyzer recursively inventories supported CSV and XML files inside Sol directories.
+Provides time-axis recognition and parsing, XML field ordering, structural field-metadata validation, numeric field identification, time-column selection, and name normalization. It does not perform complete scientific validation.
 
-It identifies:
+### 5.1 Supported time kinds
 
-- Sol folder names.
-- Sol numbers.
-- MEDA product codes.
-- File extensions.
-- Relative paths.
-- File sizes.
-- Empty-file status.
-- CSV/XML matching information.
-- File and pair status.
-- Inventory issues.
+| Kind | Handling | ⚠️ Limitation |
+|---|---|---|
+| **SCLK** | Parsed as a finite numeric coordinate | Not converted to UTC |
+| **UTC** | Timezone-aware ISO-8601 normalized to UTC epoch seconds | Naive timestamps are not assumed to be UTC |
+| **LMST** | Converted to a linear Mars-sol coordinate | Not a UTC conversion |
+| **LTST** | Converted to a nominal Sol/local-clock coordinate | Not a precise elapsed SI-time scale |
+| **ISO Naive** | Kept as a separate coordinate | Timezone remains unspecified |
 
-### 4.2 Main Functions
+Mean Mars solar day constant used: `SOL_SECONDS = 88775.244`. It is a **coordinate scale** for LMST and nominal LTST handling, not an Earth UTC conversion.
+
+<details>
+<summary><b>Main functions</b></summary>
+
+| Function | Responsibility |
+|---|---|
+| `norm(value)` | Normalize names for comparison |
+| `parse_sclk(text)` | Parse a numeric SCLK coordinate |
+| `parse_lmst(text)` | Parse LMST into a linear Sol coordinate |
+| `parse_ltst(text)` | Parse LTST into a nominal coordinate |
+| `parse_iso(text, want_aware)` | Parse ISO-8601 preserving timezone-awareness rules |
+| `column_time_kind(name)` | Identify supported time kinds from field names |
+| `ordered_fields(fields)` | Order XML fields by field number, document order as fallback |
+| `validate_field_metadata(fields)` | Report structural field-metadata warnings |
+| `pick_time_column(fields, preference)` | Select a supported time field by preference list |
+| `numeric_column_indexes(fields, skip)` | Identify XML-declared numeric columns, excluding time fields |
+
+</details>
+
+### 5.2 Behavior to know
+
+- Non-finite numeric values are rejected by the shared numeric parser.
+- Naive and timezone-aware ISO timestamps are handled separately.
+- Missing or invalid XML field numbers do not automatically discard field definitions.
+- Duplicate field names and numbers are reported structurally.
+- Time-column discovery uses names and metadata; it does not prove the CSV values are valid.
+
+> [!WARNING]
+> 🔌 Every analyzer using these utilities must preserve the selected time-axis kind and report parse failures. A parsed coordinate is not a scientifically validated timestamp.
+
+---
+
+## 6. 📁 File Discovery
+
+**Module:** `file_discovery.py`
+
+Recursively inventories supported `.csv` and `.xml` files inside Sol directories.
+
+**Records:** Sol folder and number · product code · extension · relative path · size · empty-file status · CSV/XML pairing · file and pair status · issues.
+
+### 6.1 Functions
 
 | Function | Signature | Description |
 |---|---|---|
-| `get_sol_number` | `get_sol_number(folder_name: str) -> int \| None` | Extract a Sol number from a folder name |
-| `get_filename_sol` | `get_filename_sol(filename: str) -> int \| None` | Extract a Sol number from a MEDA filename |
-| `get_product_code` | `get_product_code(filename: str) -> str \| None` | Extract the product code following `CAL_` |
-| `discover_files` | `discover_files(input_dir: Path) -> list[dict]` | Recursively discover and inventory supported files |
-| `write_inventory` | `write_inventory(records: list[dict], output_file: Path) -> None` | Write inventory records to CSV |
+| `get_sol_number` | `get_sol_number(folder_name: str) -> int \| None` | Sol number from a folder name |
+| `get_filename_sol` | `get_filename_sol(filename: str) -> int \| None` | Sol number from a MEDA filename |
+| `get_product_code` | `get_product_code(filename: str) -> str \| None` | Product code following `CAL_` |
+| `discover_files` | `discover_files(input_dir: Path) -> list[dict]` | Recursively discover and inventory files |
+| `write_inventory` | `write_inventory(records: list[dict], output_file: Path) -> None` | Write inventory to CSV |
 
-### 4.3 Input
+### 6.2 📥 Input
 
-`discover_files` expects:
+An existing directory containing recognized Sol folders, such as `SOL100`, `SOL_0100`, `SOL-100`.
 
-- An existing directory.
-- A directory containing supported Sol folders.
-- Files organized under recognized Sol directory names.
-
-Recognized Sol folder patterns include forms such as:
-
-- `SOL100`
-- `SOL_0100`
-- `SOL-100`
-
-The implementation supports `.csv` and `.xml` extensions.
-
-### 4.4 Output
-
-The inventory CSV uses the following columns:
+### 6.3 📤 Output columns
 
 | Column | Meaning |
 |---|---|
 | `sol_folder` | Source Sol folder name |
 | `sol_number` | Extracted Sol number |
 | `filename` | File name |
-| `relative_path` | Path relative to the input root |
+| `relative_path` | Path relative to input root |
 | `extension` | File extension |
 | `product_code` | Extracted product code |
 | `file_size_bytes` | File size |
 | `file_status` | File-level status |
 | `is_empty` | Whether the file is empty |
-| `matching_file` | Matching file name, when found |
-| `matching_relative_path` | Matching relative path, when found |
+| `matching_file` | Matching file name, if found |
+| `matching_relative_path` | Matching relative path, if found |
 | `pair_status` | CSV/XML pair status |
 | `issues` | Recorded inventory issues |
 
-### 4.5 Pairing Behavior
+### 6.4 Pairing rules
 
-CSV/XML matching requires:
+A CSV/XML pair requires **the same directory** and a **case-insensitive matching filename stem**. Files in different subdirectories are never paired just because names are similar. Nested Sol files are not assigned to an outer Sol directory.
 
-- The same directory.
-- A case-insensitive matching filename stem.
-
-Files in different subdirectories must not be paired merely because their names are similar.
-
-The analyzer also avoids assigning nested Sol files to an outer Sol directory.
-
-### 4.6 Limitations
-
-File discovery establishes inventory information only.
-
-It does not establish:
-
-- Successful XML parsing.
-- Valid CSV structure.
-- Measurement completeness.
-- Measurement quality.
-- Scientific validity.
-
-A discovered file must not automatically be treated as usable scientific data.
+> [!CAUTION]
+> ⚠️ Discovery establishes inventory only. It does not establish successful XML parsing, valid CSV structure, completeness, quality, or scientific validity.
 
 ---
 
-## 5. XML Metadata Parser — `xml_parser.py`
+## 7. 📄 XML Metadata Parser
 
-### 5.1 Responsibility
+**Module:** `xml_parser.py`
 
-The XML Parser extracts documented metadata from MEDA XML files.
+Extracts documented metadata from MEDA XML files and prepares records for downstream analyzers: XML structure, product and table metadata, PDS4 field definitions, Sol and product identification, CSV matching, structural warnings, and the metadata inventory.
 
-It prepares metadata records used by downstream analyzers.
-
-Its responsibilities include:
-
-- XML structure parsing.
-- Product metadata extraction.
-- Table metadata extraction.
-- PDS4 field definition extraction.
-- Sol and product identification.
-- Matching XML records to CSV files.
-- Structural metadata warning generation.
-- Metadata inventory creation.
-
-### 5.2 Main Functions
+<details>
+<summary><b>Main functions</b></summary>
 
 | Function | Responsibility |
 |---|---|
-| `local_name(tag)` | Extract a namespace-independent XML element name |
-| `element_to_dict(element)` | Convert an XML element into a dictionary representation |
+| `local_name(tag)` | Namespace-independent XML element name |
+| `element_to_dict(element)` | Convert an XML element to a dictionary |
 | `extract_field_metadata(root)` | Extract documented field definitions |
 | `classify_candidate_fields(fields)` | Identify metadata-based field candidates |
-| `extract_product_metadata(root)` | Extract product-level metadata |
-| `extract_table_metadata(root)` | Extract table-level metadata |
+| `extract_product_metadata(root)` | Product-level metadata |
+| `extract_table_metadata(root)` | Table-level metadata |
 | `parse_xml_file(xml_path, input_root=None, include_full_xml=False)` | Parse one XML file |
-| `build_metadata_warning_summary(records)` | Summarize structural metadata warnings |
+| `build_metadata_warning_summary(records)` | Summarize structural warnings |
 | `discover_xml_files(input_dir)` | Discover XML files |
-| `build_metadata_inventory(input_dir, include_full_xml=False)` | Build the complete metadata inventory |
+| `build_metadata_inventory(input_dir, include_full_xml=False)` | Build the full metadata inventory |
 | `save_json(data, output_file)` | Save metadata as JSON |
 
-### 5.3 Main Input
+</details>
 
-`parse_xml_file` accepts:
+### 7.1 📥 Main input
 
 ```python
 parse_xml_file(
@@ -242,101 +313,57 @@ parse_xml_file(
 ) -> dict
 ```
 
-Parameters:
+| Parameter | Purpose |
+|---|---|
+| `xml_path` | XML file to parse |
+| `input_root` | Optional root used to produce a relative source path |
+| `include_full_xml` | Include the complete XML tree in the output |
 
-- `xml_path`: XML file to parse.
-- `input_root`: Optional root directory used to produce a relative source path.
-- `include_full_xml`: Whether to include the complete XML tree in the output.
+### 7.2 📤 Metadata record
 
-### 5.4 Metadata Record
+Carries parsing status and, where available: source path, Sol information, product code, product metadata, table metadata, field definitions, structural warnings, and parsing error information. The exact structure is defined by the implementation and **must be preserved** when integrating downstream modules.
 
-A parsed record contains information about the source file and its extracted metadata.
+### 7.3 Metadata inventory
 
-The record includes parsing status and, where available:
+`build_metadata_inventory` returns a dictionary of parsed records plus inventory-level information, saved as JSON via `save_json`. Coverage and Quality consume it as a dictionary (normally with a `records` collection); Synchronization takes a **list of records**. The integration layer adapts this without changing record contents.
 
-- Source path.
-- Sol information.
-- Product code.
-- Product metadata.
-- Table metadata.
-- Field definitions.
-- Structural metadata warnings.
-- Parsing error information.
+### 7.4 Structural validation
 
-The exact record structure is defined by the current implementation and must be preserved when integrating downstream modules.
+Reported separately: missing field names, duplicate names, missing or invalid field numbers, duplicate numbers, missing data types. These describe **metadata structure**, not scientific validity or the meaning of quality flags.
 
-### 5.5 Metadata Inventory
-
-`build_metadata_inventory` returns a dictionary containing the parsed metadata records and inventory-level information.
-
-The metadata inventory is saved as JSON through `save_json`.
-
-The current coverage and quality analyzers consume metadata in dictionary form, normally containing a `records` collection.
-
-The synchronization analyzer accepts a list of metadata records instead. The integration layer must adapt this representation without changing record contents.
-
-### 5.6 Structural Validation
-
-The parser reports structural metadata problems separately.
-
-Examples include:
-
-- Missing field names.
-- Duplicate field names.
-- Missing or invalid field numbers.
-- Duplicate field numbers.
-- Missing data types.
-
-These warnings describe metadata structure.
-
-They do not determine scientific validity or interpret the meaning of quality flags.
-
-### 5.7 Important Limitation
-
-The XML parser extracts documented metadata. It must not invent meanings for undocumented fields or automatically repair source metadata.
+> [!CAUTION]
+> ⚠️ The parser extracts documented metadata. It must not invent meanings for undocumented fields or automatically repair source metadata.
 
 ---
 
-## 6. Coverage Analyzer — `coverage_analyzer.py`
+## 8. ⏱️ Coverage Analyzer
 
-### 6.1 Responsibility
+**Module:** `coverage_analyzer.py`
 
-The Coverage Analyzer examines CSV file coverage and data structure using the file inventory and XML metadata.
+Examines CSV coverage and structure using the inventory and XML metadata.
 
-It analyzes:
+**Analyzes:** row counts · time-field selection · timestamp parsing · missing, invalid, duplicate, and out-of-order timestamps · time-coordinate span · median positive time step · large gaps · numeric, missing, and invalid value counts · column mapping status.
 
-- CSV row counts.
-- Time-field selection.
-- Timestamp parsing.
-- Missing timestamps.
-- Invalid timestamps.
-- Duplicate timestamps.
-- Out-of-order timestamps.
-- Time-coordinate span.
-- Median positive time step.
-- Large time gaps.
-- Numeric value counts.
-- Missing numeric values.
-- Invalid numeric values.
-- Column mapping status.
-
-### 6.2 Main Functions
+<details>
+<summary><b>Main functions</b></summary>
 
 | Function | Responsibility |
 |---|---|
 | `load_file_inventory(path)` | Load the file inventory |
 | `load_metadata_inventory(path)` | Load metadata inventory |
 | `build_metadata_index(metadata)` | Index metadata records for matching |
-| `find_xml_record(csv_record, metadata_index)` | Find the corresponding XML metadata record |
+| `find_xml_record(csv_record, metadata_index)` | Find the corresponding XML record |
 | `resolve_csv_path(input_dir, inventory_record)` | Resolve a CSV path |
-| `build_column_mapping(header, fields, has_header)` | Map CSV columns to XML field definitions |
-| `analyze_csv(csv_path, xml_record, axis_preference, gap_factor)` | Analyze one CSV file |
-| `analyze_coverage(input_dir, inventory_records, metadata, gap_factor)` | Analyze CSV coverage across the inventory |
+| `build_column_mapping(header, fields, has_header)` | Map CSV columns to XML fields |
+| `analyze_csv(csv_path, xml_record, axis_preference, gap_factor)` | Analyze one CSV |
+| `analyze_coverage(input_dir, inventory_records, metadata, gap_factor)` | Analyze coverage across the inventory |
 | `build_product_summary(reports, start_sol, end_sol)` | Summarize product coverage |
 | `save_coverage_csv(reports, output_file)` | Save coverage reports |
 | `save_summary_json(summary, output_file)` | Save coverage summary |
 
-### 6.3 Main Analysis Interface
+</details>
+
+### 8.1 📥 Main interface
 
 ```python
 analyze_coverage(
@@ -347,74 +374,33 @@ analyze_coverage(
 ) -> list[dict]
 ```
 
-Inputs:
+### 8.2 Gap detection
 
-- `input_dir`: Root of the source dataset.
-- `inventory_records`: File inventory records.
-- `metadata`: XML metadata inventory dictionary.
-- `gap_factor`: Multiplier used for gap detection.
+A gap is an adjacent positive time step exceeding:
 
-The analyzer processes CSV inventory entries and uses XML metadata to interpret column definitions.
+```text
+gap_factor × median positive time step
+```
 
-### 6.4 Gap Detection
+`gap_factor` must be finite and greater than 1. Gap statistics are diagnostics of the selected time coordinate and observed sampling, **not** exact sensor downtime or a defensible missing-duration estimate.
 
-The gap threshold is based on the median positive time step.
+### 8.3 📤 Output
 
-A gap is identified when an adjacent positive time step exceeds:
+Per file: Sol · product code · source file info · row count · selected time field and kind · first/last parsed time · span · parsed/missing/invalid timestamp counts · duplicate and out-of-order counts · median step · gap count and largest gap · numeric, missing, and invalid value counts · measurement coverage status · column mapping status · notes. The exact schema is defined by the implementation.
 
-`gap_factor × median positive time step`
-
-The configured gap factor must be finite and greater than 1.
-
-The resulting gap statistics are diagnostics of the selected time coordinate and observed sampling.
-
-They must not automatically be interpreted as exact sensor downtime or a scientifically defensible missing-duration estimate.
-
-### 6.5 Output
-
-Coverage reports include information such as:
-
-- Sol number.
-- Product code.
-- Source file information.
-- Row count.
-- Selected time field and time kind.
-- First and last parsed time.
-- Time span.
-- Parsed, missing, and invalid timestamp counts.
-- Duplicate and out-of-order timestamp counts.
-- Median step.
-- Gap count and largest gap.
-- Numeric value counts.
-- Missing and invalid numeric counts.
-- Measurement coverage status.
-- Column mapping status.
-- Notes.
-
-The exact report schema is defined by the implementation.
-
-### 6.6 Interpretation Limitations
-
-Coverage analysis is not equivalent to scientific validation.
-
-In particular:
-
-- A file containing rows does not prove complete measurements.
-- Successfully parsed timestamps do not prove sensor uptime.
-- Numeric completeness does not prove scientific validity.
-- Gap statistics depend on the selected time coordinate and sampling pattern.
+> [!CAUTION]
+> ⚠️ Rows in a file do not prove complete measurements. Parsed timestamps do not prove uptime. Numeric completeness does not prove validity. Gap statistics depend on the selected coordinate and sampling pattern.
 
 ---
 
-## 7. Quality Analyzer — `quality_analyzer.py`
+## 9. 🧪 Quality Analyzer
 
-### 7.1 Responsibility
+**Module:** `quality_analyzer.py`
 
-The Quality Analyzer examines XML-described fields and corresponding CSV values for documented quality-related, operational/context, uncertainty, and numeric-range information.
+Examines XML-described fields and matching CSV values for quality-related, operational/context, and uncertainty candidates, plus documented numeric ranges. Candidate categories are kept separate.
 
-It keeps different candidate categories separate.
-
-### 7.2 Main Functions
+<details>
+<summary><b>Main functions</b></summary>
 
 | Function | Responsibility |
 |---|---|
@@ -423,19 +409,21 @@ It keeps different candidate categories separate.
 | `build_metadata_index(metadata)` | Index metadata records |
 | `find_metadata_record(inventory_row, index)` | Find matching metadata |
 | `find_csv_path(input_root, inventory_row)` | Resolve CSV source path |
-| `field_is_quality_candidate(field)` | Identify explicit quality-related keyword candidates |
-| `field_is_operational_context_candidate(field)` | Identify possible operational/context flag candidates |
-| `field_is_uncertainty_candidate(field)` | Identify measurement uncertainty candidates |
+| `field_is_quality_candidate(field)` | Explicit quality-keyword candidates |
+| `field_is_operational_context_candidate(field)` | Possible operational/context flag candidates |
+| `field_is_uncertainty_candidate(field)` | Measurement uncertainty candidates |
 | `get_field_bounds(field)` | Extract documented numeric bounds |
 | `select_field_categories(fields)` | Select fields for analysis |
-| `build_column_mapping(first_row, fields, has_header)` | Map CSV columns to metadata fields |
+| `build_column_mapping(first_row, fields, has_header)` | Map CSV columns to fields |
 | `analyze_csv(csv_path, inventory_row, xml_record, metadata_status)` | Analyze selected fields in one CSV |
-| `run_analysis(input_root, inventory, metadata)` | Run analysis across inventory records |
+| `run_analysis(input_root, inventory, metadata)` | Run across inventory records |
 | `write_report(path, rows)` | Write detailed report |
 | `build_summary(rows)` | Build summary statistics |
 | `save_summary(path, summary)` | Save summary JSON |
 
-### 7.3 Main Analysis Interface
+</details>
+
+### 9.1 📥 Main interface
 
 ```python
 run_analysis(
@@ -445,65 +433,41 @@ run_analysis(
 ) -> list[dict]
 ```
 
-Inputs:
-
-- `input_root`: Source dataset root.
-- `inventory`: File inventory records.
-- `metadata`: XML metadata inventory dictionary.
-
-The analyzer processes CSV inventory entries and uses the corresponding XML field definitions.
-
-### 7.4 Candidate Categories
-
-The implementation distinguishes the following categories:
+### 9.2 Candidate categories
 
 | Category | Purpose |
 |---|---|
 | `quality_field_candidate` | Explicit quality-related field candidates |
 | `operational_context_flag_candidate` | Possible operational or contextual flags |
-| `measurement_uncertainty` | Fields identified as measurement uncertainty candidates |
+| `measurement_uncertainty` | Fields identified as uncertainty candidates |
 | `range_check` | Numeric values checked against documented XML bounds |
 
-Keyword detection is a candidate-identification mechanism. It is not an authoritative scientific classification.
+Keyword detection **identifies candidates**; it is not an authoritative scientific classification. Words like `flag`, `status`, or `state` alone do not establish a quality-field meaning.
 
-Generic words such as `flag`, `status`, or `state` alone are not sufficient to establish a quality-field meaning.
+### 9.3 Numeric range checks
 
-### 7.5 Numeric Range Checks
+Uses documented `valid_minimum` and `valid_maximum`. A value inside the bounds is not automatically valid, and a value outside must be interpreted per the applicable product documentation.
 
-The analyzer can use documented XML values such as:
+### 9.4 What the analyzer does **not** do
 
-- `valid_minimum`
-- `valid_maximum`
+- ❌ Infer undocumented quality-flag meanings.
+- ❌ Assume binary `1 = good` / `0 = bad`.
+- ❌ Combine all candidate categories into one quality score.
+- ❌ Calculate scientific uncertainty merely because an uncertainty field exists.
+- ❌ Treat metadata warnings as measurement-quality failures.
 
-These values support numeric range checks.
-
-A range check is not a complete scientific validity assessment.
-
-A value inside documented bounds is not automatically scientifically valid, and a value outside a bound must be interpreted according to the applicable product documentation.
-
-### 7.6 Important Limitations
-
-The analyzer does not:
-
-- Infer undocumented quality-flag meanings.
-- Assume binary `1 = good` and `0 = bad`.
-- Automatically combine all candidate categories into one quality score.
-- Calculate scientific uncertainty merely because an uncertainty field exists.
-- Treat metadata warnings as measurement-quality failures.
-
-Operational/context candidates and uncertainty reports must remain distinguishable from quality-field candidates.
+Operational/context candidates and uncertainty reports remain distinguishable from quality-field candidates.
 
 ---
 
-## 8. Synchronization Analyzer — `synchronization_analyzer.py`
+## 10. 🔗 Synchronization Analyzer
 
-### 8.1 Responsibility
+**Module:** `synchronization_analyzer.py`
 
-The Synchronization Analyzer examines time-coordinate compatibility and timestamp matching between MEDA products.
+Examines time-coordinate compatibility and timestamp matching between MEDA products, producing file-level and pair-level reports.
 
-It generates file-level timestamp analysis and pair-level comparison reports.
-
-### 8.2 Main Functions
+<details>
+<summary><b>Main functions</b></summary>
 
 | Function | Responsibility |
 |---|---|
@@ -515,13 +479,15 @@ It generates file-level timestamp analysis and pair-level comparison reports.
 | `build_column_mapping(first_row, fields, has_header)` | Map CSV columns to XML fields |
 | `analyse_timestamp_file(csv_path, inventory_row, xml_record, axis_preference)` | Extract and analyze timestamps from one file |
 | `match_one_to_one(first, second, tolerance)` | Match sorted timestamp occurrences one-to-one |
-| `compare_timestamp_series(first, second, tolerance, kind_first, kind_second)` | Compare two timestamp series |
+| `compare_timestamp_series(first, second, tolerance, kind_first, kind_second)` | Compare two series |
 | `run_analysis(input_root, inventory, metadata_records, tolerance, axis_preference)` | Run file and pair analysis |
 | `write_csv(path, rows, columns)` | Write report CSV |
-| `build_summary(file_reports, pair_reports, tolerance)` | Build synchronization summary |
+| `build_summary(file_reports, pair_reports, tolerance)` | Build summary |
 | `save_summary(path, summary)` | Save summary JSON |
 
-### 8.3 Main Analysis Interface
+</details>
+
+### 10.1 📥 Main interface
 
 ```python
 run_analysis(
@@ -533,99 +499,35 @@ run_analysis(
 ) -> tuple[list[dict], list[dict]]
 ```
 
-Inputs:
+Returns **(file-level timestamp reports, pair-level synchronization reports)**. `tolerance` is the maximum absolute difference in the *selected time coordinate*.
 
-- `input_root`: Source dataset root.
-- `inventory`: File inventory records.
-- `metadata_records`: A list of XML metadata records.
-- `tolerance`: Maximum absolute difference allowed in the selected time coordinate.
-- `axis_preference`: Preferred time-axis order.
+### 10.2 Design rules
 
-The return value contains:
+| Rule | Behavior |
+|---|---|
+| **Axis compatibility** | Products compare only when their selected time-axis kinds are compatible. Mismatches are reported as incompatible. No silent axis conversion. |
+| **One-to-one matching** | Each timestamp occurrence participates in at most one match, so one occurrence is never reused against multiple observations. |
+| **Duplicates** | Duplicate timestamp occurrences remain separate observations. |
+| **Tolerance** | Applied in the selected coordinate. Not automatically SI seconds. |
 
-1. File-level timestamp reports.
-2. Pair-level synchronization reports.
+### 10.3 📤 Output
 
-### 8.4 Time-Axis Compatibility
+File-level and pair-level analysis, selected time-axis info, parsing and analysis status, match counts, unmatched counts, match rates, match-difference statistics, overlap information where applicable, notes, and compatibility status.
 
-The analyzer selects a supported time field using metadata and the configured axis preference.
-
-Products are compared only when their selected time-axis kinds are compatible.
-
-Different time-axis kinds are reported as incompatible.
-
-The analyzer does not silently convert one time axis into another to force a comparison.
-
-### 8.5 One-to-One Matching
-
-`match_one_to_one` matches sorted timestamp occurrences.
-
-Each occurrence may participate in at most one match.
-
-Duplicate timestamp occurrences remain separate observations.
-
-This prevents a single timestamp occurrence from being reused to match multiple observations in the other series.
-
-### 8.6 Tolerance
-
-Tolerance is applied in the selected coordinate.
-
-Its numeric value must not automatically be described as SI seconds.
-
-Its interpretation depends on the selected time axis.
-
-### 8.7 Output
-
-The analyzer produces:
-
-- File-level timestamp analysis.
-- Pair-level timestamp comparison.
-- Selected time-axis information.
-- Parsing and analysis status.
-- Match counts.
-- Unmatched occurrence counts.
-- Match rates.
-- Match-difference statistics.
-- Overlap information where applicable.
-- Notes and compatibility status.
-
-### 8.8 Interpretation Limitations
-
-Synchronization results are diagnostics, not quality scores.
-
-A high match rate does not establish:
-
-- Equal sampling schedules.
-- Equivalent scientific measurements.
-- Sensor accuracy.
-- Continuous instrument operation.
-- Scientific validity.
-
-Different products may have different sampling schedules.
+> [!CAUTION]
+> ⚠️ Synchronization results are diagnostics, **not quality scores**. A high match rate does not establish equal sampling schedules, equivalent measurements, sensor accuracy, continuous operation, or validity.
 
 ---
 
-## 9. Period Ranker — `period_ranker.py`
+## 11. 🏁 Period Ranker
 
-### 9.1 Responsibility
+**Module:** `period_ranker.py`
 
-The Period Ranker compares candidate Sol windows using reports produced by the preceding analyzers.
+Compares candidate Sol windows using reports from the preceding analyzers and produces **exploratory** scores and ranks. It does not certify a period as scientifically valid or suitable for a research question.
 
-It produces exploratory comparative scores and ranks.
+### 11.1 📥 Input architecture
 
-It does not certify a period as scientifically valid or suitable for a particular research question.
-
-### 9.2 Input Architecture
-
-Unlike the other analyzers, the Period Ranker is report-file-oriented.
-
-Its main entry point is:
-
-```python
-run(args) -> dict
-```
-
-It reads five report files:
+Unlike the other analyzers, the ranker is **report-file-oriented**. Entry point: `run(args) -> dict`.
 
 | Argument | Input |
 |---|---|
@@ -635,14 +537,10 @@ It reads five report files:
 | `args.sync_files` | Synchronization file report CSV |
 | `args.sync_pairs` | Synchronization pair report CSV |
 
-It writes:
+Writes the ranking CSV (`args.output`) and summary JSON (`args.summary`). Paths must be supplied explicitly during isolated run execution.
 
-- Ranking CSV through `args.output`.
-- Summary JSON through `args.summary`.
-
-The paths must be supplied explicitly during isolated run execution.
-
-### 9.3 Main Functions
+<details>
+<summary><b>Main functions</b></summary>
 
 | Function | Responsibility |
 |---|---|
@@ -654,372 +552,226 @@ The paths must be supplied explicitly during isolated run execution.
 | `analyse_inventory(rows, start_sol, end_sol)` | Aggregate inventory information |
 | `analyse_coverage(rows)` | Aggregate coverage information |
 | `analyse_quality(rows)` | Aggregate quality information |
-| `analyse_sync_files(rows)` | Aggregate synchronization file information |
-| `analyse_sync_pairs(rows)` | Aggregate synchronization pair information |
-| `calculate_integrity(coverage_data, integrity_weights)` | Calculate the data-integrity indicator |
-| `calculate_sol_metrics(...)` | Calculate available per-Sol metrics |
-| `aggregate_window(...)` | Aggregate metrics for a candidate window |
-| `rank_windows(rows)` | Rank comparable candidate windows |
+| `analyse_sync_files(rows)` | Aggregate sync file information |
+| `analyse_sync_pairs(rows)` | Aggregate sync pair information |
+| `calculate_integrity(coverage_data, integrity_weights)` | Data-integrity indicator |
+| `calculate_sol_metrics(...)` | Available per-Sol metrics |
+| `aggregate_window(...)` | Aggregate metrics for a window |
+| `rank_windows(rows)` | Rank comparable windows |
 | `build_summary(...)` | Build ranking summary |
-| `run(args)` | Execute the complete ranking workflow |
+| `run(args)` | Execute the full ranking workflow |
 
-### 9.4 Ranking Metrics
+</details>
 
-The implementation uses four principal metric categories:
+### 11.2 Metrics and default weights
 
-| Metric | Purpose |
-|---|---|
-| File Availability | Availability of configured required products |
-| Data Integrity | Timestamp and numeric-value completeness indicators |
-| Quality Indicators | Availability of supported documented numerical-bound indicators |
-| Synchronization | Available synchronization match-rate information |
+| Metric | Purpose | Default weight |
+|---|---|:-:|
+| **File Availability** | Availability of configured required products | `0.20` |
+| **Data Integrity** | Timestamp and numeric-value completeness indicators | `0.45` |
+| **Quality Indicators** | Availability of supported documented numerical-bound indicators | `0.15` |
+| **Synchronization** | Available synchronization match-rate information | `0.20` |
 
-The default ranking weights in the current implementation are:
+Weights are configurable via command-line arguments. They are **exploratory, not scientifically calibrated constants**.
 
-| Metric | Default Weight |
-|---|---:|
-| File Availability | 0.20 |
-| Data Integrity | 0.45 |
-| Quality Indicators | 0.15 |
-| Synchronization | 0.20 |
+**Required products (default):** `ATS` · `PS` · `RDS` · `RHS` · `TIRS` · `WS`. `ENG` is optional by default. Override with `--required-products`.
 
-Weights are configurable through command-line arguments.
+**Data integrity** uses timestamp and numeric-value completeness with default internal weights Timestamps `1.0` and Values `1.0`. Unavailable components are never silently treated as zero quality.
 
-These are exploratory configuration weights, not scientifically calibrated constants.
-
-### 9.5 Required Products
-
-The default required product codes are:
-
-- ATS
-- PS
-- RDS
-- RHS
-- TIRS
-- WS
-
-ENG is optional by default.
-
-The required product set can be overridden through `--required-products`.
-
-File availability is calculated against the configured required product set.
-
-### 9.6 Data Integrity
-
-The data-integrity indicator uses available timestamp and numeric-value completeness information.
-
-The default internal integrity component weights are:
-
-- Timestamps: 1.0
-- Values: 1.0
-
-Unavailable components must not silently be interpreted as zero-quality measurements.
-
-### 9.7 Candidate Window Aggregation
-
-The ranker:
-
-1. Resolves the requested Sol range.
-2. Builds candidate windows.
-3. Calculates available metrics for each Sol.
-4. Aggregates available metric values across each window.
-5. Applies configured metric weights.
-6. Excludes unavailable metrics from the weighted calculation.
-7. Renormalizes the remaining positive weights.
-8. Determines whether the window meets the ranking requirements.
-9. Groups comparable windows.
-10. Assigns ranks within each comparison group.
-
-### 9.8 Ranking Status
-
-The implementation distinguishes:
-
-| Status | Meaning |
-|---|---|
-| `rankable` | The window meets the required metric availability and is a full window |
-| `partial_window` | The window is incomplete relative to the configured window size |
-| `insufficient_data` | Too few positively weighted metrics are available |
-
-Partial windows are not ranked against full candidate windows.
-
-### 9.9 Comparison Groups
-
-Windows are ranked only against windows with the same available positively weighted metric signature.
-
-Ranks from different comparison groups are not directly comparable.
-
-A single global best window is reported only when there is one comparison group.
-
-When multiple groups exist, the summary reports the best window in each group rather than presenting an unsupported global comparison.
-
-### 9.10 Output
-
-The ranking CSV includes:
-
-- Rank.
-- Comparison group.
-- Window start and end Sol.
-- Window label.
-- Ranking status.
-- Partial-window indicator.
-- Exploratory score.
-- Available metric count.
-- Metrics used.
-- Metric-specific scores and Sol counts.
-- Explanatory reasons.
-
-The summary JSON includes:
-
-- Ranking type.
-- Selected Sol range.
-- Window size.
-- Candidate and rankable window counts.
-- Comparison group information.
-- Ranking weights.
-- Required and optional products.
-- Minimum Sol fraction.
-- Minimum metric requirement.
-- Best candidate by comparison group.
-- Sol-level metrics.
-- Input report paths.
-- Important limitations.
-
-### 9.11 Important Limitations
-
-- Scores are exploratory indicators, not scientific validation.
-- Ranking weights are configurable and not scientifically calibrated.
-- Unavailable metrics are excluded and remaining positive weights are renormalized.
-- Zero-weight metrics do not contribute to scores or comparison groups.
-- Different comparison groups must not be treated as directly comparable.
-- Partial windows are listed but not ranked.
-- Timestamp parsing success is not equivalent to sensor uptime.
-- Numeric completeness is not equivalent to scientific validity.
-- Synchronization scores depend on sampling schedules and matching tolerance.
-- Product availability does not establish measurement completeness.
-- Candidate periods require further scientific review before research use.
-
----
-
-## 10. Analyzer Dependency Flow
-
-The intended analytical dependency flow is:
+### 11.3 How a window is scored
 
 ```mermaid
 flowchart TD
-    A[Input Dataset] --> B[File Discovery]
-    A --> C[XML Parser]
-    B --> D[Inventory Records]
-    C --> E[Metadata Records]
-    D --> F[Coverage Analyzer]
-    E --> F
-    D --> G[Quality Analyzer]
-    E --> G
-    D --> H[Synchronization Analyzer]
-    E --> H
-    F --> I[Coverage Report]
-    G --> J[Quality Report]
-    H --> K[File Synchronization Report]
-    H --> L[Pair Synchronization Report]
-    D --> M[Inventory CSV]
-    I --> N[Period Ranker]
-    J --> N
-    K --> N
-    L --> N
-    M --> N
-    N --> O[Ranking CSV and Summary JSON]
+    A[Resolve Sol range] --> B[Build candidate windows]
+    B --> C[Calculate available metrics per Sol]
+    C --> D[Aggregate across each window]
+    D --> E[Exclude unavailable metrics]
+    E --> F[Renormalize remaining positive weights]
+    F --> G{Meets ranking requirements?}
+    G -- Full window, enough metrics --> H[rankable]
+    G -- Incomplete window --> I[partial_window]
+    G -- Too few metrics --> J[insufficient_data]
+    H --> K[Group by metric signature]
+    K --> L[Rank within each comparison group]
 ```
 
-This diagram describes the intended workflow. The current modules are independently callable; a completed integrated pipeline must not be assumed.
+### 11.4 Ranking status
 
-## 11. Interface Differences and Integration Requirements
-
-The analyzers do not currently expose one universal interface.
-
-The following differences must be handled explicitly.
-
-### 11.1 Metadata Representation
-
-| Analyzer | Metadata Input |
+| Status | Meaning |
 |---|---|
-| Coverage Analyzer | Metadata dictionary |
-| Quality Analyzer | Metadata dictionary |
-| Synchronization Analyzer | List of metadata records |
+| `rankable` | Meets required metric availability and is a full window |
+| `partial_window` | Incomplete relative to the configured window size |
+| `insufficient_data` | Too few positively weighted metrics available |
 
-The integration layer must normalize or adapt the representation at the boundary.
+Partial windows are listed but never ranked against full windows.
 
-The original metadata records must remain unchanged.
+### 11.5 Comparison groups
 
-### 11.2 Return Types
+Windows are ranked only against windows with the **same available positively weighted metric signature**. Ranks from different groups are not directly comparable. A single global best window is reported only when there is **one** group; otherwise the summary reports the best window **per group**.
 
-| Analyzer | Main Return |
+### 11.6 📤 Output
+
+<table>
+<tr><th>Ranking CSV</th><th>Summary JSON</th></tr>
+<tr><td valign="top">
+
+Rank · comparison group · window start/end Sol · label · ranking status · partial-window flag · exploratory score · available metric count · metrics used · metric-specific scores and Sol counts · explanatory reasons
+
+</td><td valign="top">
+
+Ranking type · Sol range · window size · candidate and rankable counts · comparison groups · weights · required/optional products · minimum Sol fraction · minimum metric requirement · best candidate per group · Sol-level metrics · input report paths · limitations
+
+</td></tr>
+</table>
+
+> [!WARNING]
+> ⚠️ **Limitations:** scores are exploratory, not validation · weights are not calibrated · unavailable metrics are excluded and remaining positive weights renormalized · zero-weight metrics contribute to neither scores nor groups · different groups are not directly comparable · timestamp parsing is not uptime · numeric completeness is not validity · sync scores depend on sampling schedules and tolerance · product availability is not measurement completeness · candidate periods need further scientific review before research use.
+
+---
+
+## 12. Dependency Flow
+
+```mermaid
+flowchart LR
+    DS[Input Dataset] --> FD[File Discovery]
+    DS --> XP[XML Parser]
+    FD --> INV[Inventory Records]
+    XP --> META[Metadata Records]
+
+    INV --> COV[Coverage Analyzer]
+    INV --> QUA[Quality Analyzer]
+    INV --> SYN[Synchronization Analyzer]
+    META --> COV
+    META --> QUA
+    META --> SYN
+
+    COV --> CR[Coverage Report]
+    QUA --> QR[Quality Report]
+    SYN --> SF[File Sync Report]
+    SYN --> SP[Pair Sync Report]
+    INV --> INVCSV[Inventory CSV]
+
+    CR --> PR[Period Ranker]
+    QR --> PR
+    SF --> PR
+    SP --> PR
+    INVCSV --> PR
+    PR --> OUT[Ranking CSV + Summary JSON]
+```
+
+> [!NOTE]
+> This is the **intended** workflow. The modules are independently callable; a completed integrated pipeline must not be assumed.
+
+---
+
+## 13. Interface Differences and Integration Requirements
+
+The analyzers do not expose one universal interface. These differences must be handled explicitly.
+
+### 13.1 Metadata representation
+
+| Analyzer | Metadata input |
+|---|---|
+| Coverage | Metadata **dictionary** |
+| Quality | Metadata **dictionary** |
+| Synchronization | **List** of metadata records |
+
+The integration layer adapts at the boundary. Original metadata records stay unchanged.
+
+### 13.2 Return types
+
+| Analyzer | Main return |
 |---|---|
 | File Discovery | List of inventory dictionaries |
 | XML Parser | Metadata record or metadata inventory dictionary |
-| Coverage Analyzer | List of coverage report dictionaries |
-| Quality Analyzer | List of quality report dictionaries |
-| Synchronization Analyzer | Tuple containing file reports and pair reports |
+| Coverage | List of coverage report dictionaries |
+| Quality | List of quality report dictionaries |
+| Synchronization | Tuple of file reports and pair reports |
 | Period Ranker | Summary dictionary; also writes ranking CSV and summary JSON |
 
-### 11.3 File-Based Ranking
+### 13.3 Further requirements
 
-The Period Ranker consumes report paths rather than receiving all preceding analyzer results as direct function arguments.
-
-Pipeline integration must generate and validate the required reports before invoking it.
-
-### 11.4 Explicit Paths
-
-Analyzer command-line defaults may refer to shared `input/` and `output/` locations.
-
-Run-based execution must provide explicit paths associated with the current Run ID.
-
-Default paths must not cause separate runs to share outputs unintentionally.
-
-### 11.5 No Assumed Unified API
-
-The current analyzer modules must not be described as implementing a shared standardized result object or pipeline contract.
-
-Any future adapters or standardized contracts require separate design, approval, and testing.
+- 🔌 **File-based ranking:** the pipeline must generate and validate all required reports before invoking the ranker.
+- 🔌 **Explicit paths:** CLI defaults may point to shared `input/` and `output/` locations. Run-based execution must pass explicit paths tied to the current Run ID so separate runs never share outputs unintentionally.
+- 🔌 **No assumed unified API:** the modules do not implement a shared result object or pipeline contract. Any future adapter or contract needs separate design, approval, and testing.
 
 ---
 
-## 12. Command-Line Interfaces
+## 14. Command-Line Interfaces
 
-The analyzer modules provide standalone command-line entry points.
+Each module has a standalone CLI. Options present in the inspected implementations:
 
-The following options are present in the inspected implementations:
-
-| Module | Selected CLI Options |
+| Module | Selected options |
 |---|---|
-| `file_discovery.py` | `--input`, `--output` |
-| `xml_parser.py` | `--input`, `--output`, `--include-full-xml` |
-| `coverage_analyzer.py` | `--input`, `--inventory`, `--metadata`, `--output`, `--summary`, `--start-sol`, `--end-sol`, `--gap-factor` |
-| `quality_analyzer.py` | `--input`, `--inventory`, `--metadata`, `--output`, `--summary` |
-| `synchronization_analyzer.py` | `--input`, `--inventory`, `--metadata`, `--file-report`, `--pair-report`, `--summary`, `--tolerance`, `--time-axis` |
-| `period_ranker.py` | Report input paths, output paths, Sol range, window size, metric thresholds, product selection, and ranking weights |
+| `file_discovery.py` | `--input` `--output` |
+| `xml_parser.py` | `--input` `--output` `--include-full-xml` |
+| `coverage_analyzer.py` | `--input` `--inventory` `--metadata` `--output` `--summary` `--start-sol` `--end-sol` `--gap-factor` |
+| `quality_analyzer.py` | `--input` `--inventory` `--metadata` `--output` `--summary` |
+| `synchronization_analyzer.py` | `--input` `--inventory` `--metadata` `--file-report` `--pair-report` `--summary` `--tolerance` `--time-axis` |
+| `period_ranker.py` | Report input paths, output paths, Sol range, window size, metric thresholds, product selection, ranking weights |
 
-Exact defaults and supported values must be checked against the current source code.
-
-Use each module's `--help` output to inspect its current command-line interface before execution.
-
-No unified application command is documented here because a completed integrated pipeline has not yet been established.
+Check exact defaults and supported values against the source. Run each module with `--help` before executing. No unified application command is documented because an integrated pipeline is not yet established.
 
 ---
 
-## 13. Testing and Regression Requirements
+## 15. Testing and Regression Requirements
 
-Each analyzer must be tested independently before and after integration changes.
+Test each analyzer independently before and after integration changes.
 
-Recommended test areas include:
+| Module | Required test areas |
+|---|---|
+| **Shared utilities** | Time-axis parsing · timezone-awareness · invalid and non-finite values · XML field ordering · duplicate field detection · missing field metadata · time-column selection |
+| **File Discovery** | Recognized/unrecognized Sol folders · nested Sol directories · supported/unsupported extensions · CSV/XML matching · same stems in different directories · empty files · missing input directories |
+| **XML Parser** | Valid and malformed XML · missing field definitions · duplicate names/numbers · missing data types · relative source paths · optional full XML output |
+| **Coverage** | Missing, invalid, duplicate, out-of-order timestamps · missing and invalid numeric values · different column mappings · gap detection · missing or invalid XML metadata |
+| **Quality** | Quality keyword candidates · operational/context candidates · uncertainty candidates · documented bounds · missing field definitions · missing and invalid values · separation between categories |
+| **Synchronization** | Compatible and incompatible axes · invalid timestamps · duplicate occurrences · one-to-one matching · zero and nonzero tolerance · different sampling schedules · missing metadata |
+| **Period Ranker** | Required product configuration · missing metrics · weight normalization · minimum Sol fraction · minimum metric requirements · partial windows · multiple comparison groups · tie behavior · missing input reports · explicit and automatic Sol ranges |
 
-### 13.1 Shared Utilities
-
-- Time-axis parsing.
-- Timezone-awareness handling.
-- Invalid and non-finite values.
-- XML field ordering.
-- Duplicate field detection.
-- Missing field metadata.
-- Time-column selection.
-
-### 13.2 File Discovery
-
-- Recognized and unrecognized Sol folders.
-- Nested Sol directories.
-- Supported and unsupported extensions.
-- CSV/XML matching.
-- Same filename stems in different directories.
-- Empty files.
-- Missing input directories.
-
-### 13.3 XML Parser
-
-- Valid XML.
-- Malformed XML.
-- Missing field definitions.
-- Duplicate names and field numbers.
-- Missing data types.
-- Relative source paths.
-- Optional full XML output.
-
-### 13.4 Coverage Analyzer
-
-- Missing timestamps.
-- Invalid timestamps.
-- Duplicate timestamps.
-- Out-of-order timestamps.
-- Missing numeric values.
-- Invalid numeric values.
-- Different column mappings.
-- Gap detection behavior.
-- Missing or invalid XML metadata.
-
-### 13.5 Quality Analyzer
-
-- Quality keyword candidates.
-- Operational/context candidates.
-- Uncertainty candidates.
-- Documented numeric bounds.
-- Missing field definitions.
-- Missing and invalid values.
-- Separation between candidate categories.
-
-### 13.6 Synchronization Analyzer
-
-- Compatible time axes.
-- Incompatible time axes.
-- Invalid timestamps.
-- Duplicate timestamp occurrences.
-- One-to-one matching.
-- Zero and nonzero tolerances.
-- Different product sampling schedules.
-- Missing metadata.
-
-### 13.7 Period Ranker
-
-- Required product configuration.
-- Missing metrics.
-- Weight normalization.
-- Minimum Sol fraction.
-- Minimum metric requirements.
-- Partial windows.
-- Multiple comparison groups.
-- Ranking tie behavior.
-- Missing input reports.
-- Explicit and automatically detected Sol ranges.
-
-### 13.8 Regression Principle
-
-Changes to analyzer interfaces must not silently change scientific calculations or the meaning of existing report fields.
-
-Regression results must be compared against documented expectations and representative datasets.
+> [!IMPORTANT]
+> **Regression principle:** interface changes must not silently change scientific calculations or the meaning of existing report fields. Compare regression results against documented expectations and representative datasets. Passing tests does not establish complete scientific validation.
 
 ---
 
-## 14. Scientific Interpretation Boundaries
+## 16. Scientific Interpretation Boundaries
 
-The analyzers provide technical and exploratory evidence.
+The analyzers provide technical and exploratory evidence. Interpret outputs with these distinctions:
 
-Their outputs must be interpreted with the following distinctions:
+| ✅ Do not conflate | with |
+|---|---|
+| File existence | Data completeness |
+| Data completeness | Measurement quality |
+| Measurement quality | Scientific validity |
+| XML metadata warnings | Measurement-quality failures |
+| Documented numeric bounds | Comprehensive scientific validation |
+| Timestamp matching | Equivalent measurements |
+| Synchronization match rates | Quality scores |
+| Candidate ranking | Certification of a research period |
 
-- File existence is not data completeness.
-- Data completeness is not measurement quality.
-- Measurement quality is not scientific validity.
-- XML metadata warnings are not automatically measurement-quality failures.
-- Documented numeric bounds are not comprehensive scientific validation.
-- Timestamp matching does not prove equivalent measurements.
-- Synchronization match rates are not quality scores.
-- Candidate ranking does not certify a research period.
-- MEDA observations represent measurements at the rover location and observation times, not continuous spatial weather coverage across every geographical cell.
+MEDA observations are measurements **at the rover location and observation times**, not continuous spatial weather coverage across every geographical cell.
 
 No undocumented quality-flag semantics or timestamp conversions may be introduced during analyzer integration.
 
 ---
 
-## 15. Maintenance and Change Control
+## 17. Remaining Development Priorities
 
-Changes to analyzer modules must follow the project Development Guide.
+These are important work areas. Listing them does not mean they are implemented.
 
-Before modifying an analyzer:
+| Area | Work |
+|---|---|
+| **Scientific logic** | Review special constants and their classification · strengthen documented-bound handling · improve uncertainty analysis where metadata supports it · review physical plausibility checks · preserve distinctions between measurement values, metadata, and diagnostics |
+| **Official quality info** | Flag meanings require authoritative documentation. No interpretation from field names or assumptions. |
+| **Analyzer consistency** | Standardize error reporting where approved · consistent metadata handling · review output schemas · consistent handling of unavailable metrics · preserve backward compatibility |
+| **Performance** | Profile representative datasets · find repeated metadata processing · reduce unnecessary file and XML operations · benchmark on equivalent inputs · confirm results are unchanged |
+| **Scientific validation** | Expand representative inputs · build independently verifiable reference cases · compare with expected results · document known limitations · maintain regression tests |
+| **Pipeline readiness** | Integrate through documented interfaces and explicit run-specific paths · preserve analyzer outputs and errors without changing their meaning |
+
+---
+
+## 18. Maintenance and Change Control
+
+Changes follow the project Development Guide.
 
 1. Inspect the current implementation.
 2. Identify the exact function and interface affected.
@@ -1027,22 +779,41 @@ Before modifying an analyzer:
 4. Identify scientific and integration risks.
 5. Obtain approval for the proposed scope.
 6. Implement only the approved change.
-7. Execute relevant unit and regression tests.
+7. Run relevant unit and regression tests.
 8. Review output compatibility.
-9. Update this document when the public interface or behavior changes.
+9. Update this document if public interface or behavior changes.
 10. Obtain acceptance before closing the task.
 
-Scientific logic changes require separate scientific review and approval.
+Scientific logic changes require separate scientific review and approval. Ranking methodology or weight changes must not be introduced without explicit approval.
 
-## 16. Related Documentation
+---
 
-- `README.md` — Project overview and roadmap.
-- `docs/development_guide.md` — Development workflow and change control.
-- `docs/architecture.md` — System architecture and component responsibilities.
-- `docs/backend_integration_specification.md` — Backend integration contracts.
-- `docs/scientific_methodology.md` — Scientific methodology and interpretation constraints.
-- `docs/user_guide.md` — End-user instructions.
+## 19. Related Documentation
 
-## 17. Governing Principle
+| Document | Content |
+|---|---|
+| `README.md` | Project overview and roadmap |
+| `docs/development_guide.md` | Development workflow and change control |
+| `docs/architecture.md` | System architecture and component responsibilities |
+| `docs/backend_integration_specification.md` | Backend integration contracts |
+| `docs/scientific_methodology.md` | Scientific methodology and interpretation constraints |
+| `docs/user_guide.md` | End-user instructions |
 
-**Analyzer documentation must describe actual source-code behavior, preserve interface accuracy, and distinguish technical analysis from scientific interpretation.**
+---
+
+## 20. Assessment Summary
+
+The analyzer layer has an established initial implementation across the principal stages of calibrated MEDA exploration and candidate period evaluation. It is **not** yet a finalized or fully validated scientific engine.
+
+| | |
+|---|---|
+| Operational reliability | ≈ 65% · preliminary engineering assessment |
+| Scientific accuracy | Not Yet Quantified · pending broader reference-based validation |
+| Current focus | Scientific logic, consistency, performance, testing, and integration readiness |
+| Supported scope | MEDA Calibrated Data only |
+
+---
+
+## 21. Governing Principle
+
+> Analyzer documentation must describe actual source-code behavior, preserve interface accuracy, distinguish technical analysis from scientific interpretation, and clearly separate implemented functionality from validated scientific capability.
